@@ -272,7 +272,7 @@ class NumpyEncoder(json.JSONEncoder):
         elif isinstance(obj, (np.ndarray,)):
             return obj.tolist()
         return json.JSONEncoder.default(self, obj)
-
+            
 def main():
     processor = EnhancedDataProcessor()
     print("Loading market data...")
@@ -300,6 +300,6 @@ def main():
     with open('fundamental_data.json', 'w') as f:
         json.dump(signals, f, indent=4, cls=NumpyEncoder)
     print("\nSignals saved to fundamental_data.json")
-
+        
 if __name__ == "__main__":
-    main()
+    main() 

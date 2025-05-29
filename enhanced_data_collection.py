@@ -216,7 +216,7 @@ class EnhancedDataCollector:
         for ticker in tickers:
             stock_data[ticker] = self.collect_stock_data(ticker, start_date)
             time.sleep(1)  # Avoid rate limiting
-
+        
         # Collect economic indicators
         economic_data = self.collect_economic_data()
 
@@ -332,6 +332,6 @@ def main():
     print("\nMarket Sentiment Analysis:")
     for sector, sentiment in data['market_sentiment'].items():
         print(f"- {sector}: {sentiment:.2f}")
-
+        
 if __name__ == "__main__":
     main() 

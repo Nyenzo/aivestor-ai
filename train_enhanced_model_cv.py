@@ -47,9 +47,10 @@ def load_sentiment_data():
 def evaluate_predictions(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
     """Calculate various evaluation metrics"""
     return {
-        'RMSE': np.sqrt(mean_squared_error(y_true, y_pred)),
-        'MAE': mean_absolute_error(y_true, y_pred),
-        'R2': r2_score(y_true, y_pred)
+        'accuracy': accuracy_score(y_true, y_pred),
+        'precision': precision_score(y_true, y_pred),
+        'recall': recall_score(y_true, y_pred),
+        'f1': f1_score(y_true, y_pred)
     }
 
 def plot_predictions(y_true: np.ndarray, y_pred: np.ndarray, title: str):
@@ -86,10 +87,14 @@ def main():
     sentiment_results = load_sentiment_data()
     print(f"Loaded sentiment data for {len(sentiment_results)} sectors")
     
+    # Get all tickers
+    all_tickers = predictor.get_all_tickers()
+    print(f"\nProcessing {len(all_tickers)} tickers...")
+    
     # Collect enhanced data
     print("\nCollecting enhanced historical and fundamental data...")
     collected_data = predictor.data_collector.collect_all_data(
-        predictor.sector_etfs.values(), 
+        all_tickers, 
         start_date='2018-01-01'
     )
     
@@ -99,31 +104,15 @@ def main():
     y_long_all = []
     
     print("\nPreparing data for cross-validation...")
-    for sector, ticker in predictor.sector_etfs.items():
-        stock_data = collected_data['stock_data'].get(ticker)
-        if stock_data is None:
-            continue
-            
-        sector_sentiment = sentiment_results.get(sector, {'sentiment': 0.0})['sentiment']
-        
-        # Prepare features with fundamental data
-        features = predictor.prepare_features(
-            stock_data=stock_data,
-            economic_data=collected_data['economic_indicators'],
-            sentiment_score=sector_sentiment
-        )
-        
-        # Create labels
-        short_term_returns = stock_data['Close'].pct_change(periods=63)  # ~3 months
-        long_term_returns = stock_data['Close'].pct_change(periods=252)  # ~1 year
-        
-        # Remove rows with NaN values
-        valid_idx = ~(features.isna().any(axis=1) | short_term_returns.isna() | long_term_returns.isna())
-        
-        if valid_idx.sum() > 0:
-            X_all.extend(features[valid_idx].values)
-            y_short_all.extend((short_term_returns[valid_idx] > 0).astype(int))
-            y_long_all.extend((long_term_returns[valid_idx] > 0).astype(int))
+    
+    # Process ETFs
+    for sector, etf in predictor.sector_etfs.items():
+        predictor._process_ticker_data(collected_data, sector, etf, X_all, y_short_all, y_long_all, is_etf=True)
+    
+    # Process individual stocks
+    for sector, tickers in predictor.sector_tickers.items():
+        for ticker in tickers:
+            predictor._process_ticker_data(collected_data, sector, ticker, X_all, y_short_all, y_long_all, is_etf=False)
     
     X_all = np.array(X_all)
     y_short_all = np.array(y_short_all)
@@ -158,10 +147,9 @@ def main():
         predictor.long_term_model.fit(X_train_scaled, y_long_train)
         y_long_pred = predictor.long_term_model.predict(X_test_scaled)
         long_term_metrics.append(evaluate_predictions(y_long_test, y_long_pred))
-    
-    # Plot cross-validation results
-    plot_predictions(y_short_all, y_short_pred, 'Short-term Model Predictions')
-    plot_predictions(y_long_all, y_long_pred, 'Long-term Model Predictions')
+        
+        print(f"Short-term metrics: {short_term_metrics[-1]}")
+        print(f"Long-term metrics: {long_term_metrics[-1]}")
     
     # Train final models on full dataset
     print("\nTraining final models on full dataset...")
@@ -173,17 +161,34 @@ def main():
     print("\nSaving trained models...")
     save_models(predictor)
     
-    # Generate and save predictions
-    print("\nGenerating predictions for each sector...")
+    # Generate predictions for all tickers
+    print("\nGenerating predictions for all tickers...")
     predictions = {}
-    for sector, ticker in predictor.sector_etfs.items():
-        sentiment_score = sentiment_results.get(sector, {'sentiment': 0.0})['sentiment']
-        pred = predictor.predict_sector(sector, ticker, sentiment_score)
+    for sector, etf in predictor.sector_etfs.items():
+        # ETF predictions
+        pred = predictor.predict(etf, sector)
         if pred:
-            predictions[sector] = pred
-            print(f"\n{sector} Predictions:")
+            predictions[f"{sector}_ETF"] = pred
+            print(f"\n{sector} ETF ({etf}) Predictions:")
             print(f"Short-term: {pred['short_term']['prediction']} (Confidence: {pred['short_term']['confidence']:.2f})")
             print(f"Long-term: {pred['long_term']['prediction']} (Confidence: {pred['long_term']['confidence']:.2f})")
+        
+        # Individual stock predictions
+        for ticker in predictor.sector_tickers[sector]:
+            pred = predictor.predict(ticker, sector)
+            if pred:
+                predictions[ticker] = pred
+                print(f"\n{ticker} Predictions:")
+                print(f"Short-term: {pred['short_term']['prediction']} (Confidence: {pred['short_term']['confidence']:.2f})")
+                print(f"Long-term: {pred['long_term']['prediction']} (Confidence: {pred['long_term']['confidence']:.2f})")
+    
+    # Generate portfolio recommendations
+    print("\nGenerating portfolio recommendations...")
+    recommendations = {
+        'conservative': predictor.generate_portfolio_recommendation('conservative'),
+        'moderate': predictor.generate_portfolio_recommendation('moderate'),
+        'aggressive': predictor.generate_portfolio_recommendation('aggressive')
+    }
     
     # Save results
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -194,21 +199,18 @@ def main():
             'short_term': short_term_metrics,
             'long_term': long_term_metrics
         },
-        'recommendations': {
-            'conservative': predictor.generate_portfolio_recommendation(predictions, 'conservative'),
-            'moderate': predictor.generate_portfolio_recommendation(predictions, 'moderate'),
-            'aggressive': predictor.generate_portfolio_recommendation(predictions, 'aggressive')
-        }
+        'recommendations': recommendations
     }
     
     with open(f'prediction_results_cv_{timestamp}.json', 'w') as f:
         json.dump(output, f, indent=4)
     
     print(f"\nResults saved to prediction_results_cv_{timestamp}.json")
-    print("\nCross-validation plots saved as Short-term_Model_cv_metrics.png and Long-term_Model_cv_metrics.png")
-
+    
     # Plot feature importance
-    plot_feature_importance(predictor.feature_importance)
+    if predictor.feature_importance:
+        plot_feature_importance(predictor.feature_importance)
+        print("\nFeature importance plot saved")
 
 if __name__ == "__main__":
     main() 

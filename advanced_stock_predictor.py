@@ -11,7 +11,7 @@ import torch
 import ta
 import warnings
 from fundamental_data_collector import FundamentalDataCollector
-from typing import Dict, Any
+from typing import Dict, Any, List, Union
 warnings.filterwarnings('ignore')
 
 class AdvancedStockPredictor:
@@ -27,6 +27,18 @@ class AdvancedStockPredictor:
             'Utilities': 'XLU'
         }
         
+        # Add individual stock tickers for each sector
+        self.sector_tickers = {
+            "Technology": ["AAPL", "MSFT", "NVDA", "GOOGL", "META", "ADBE"],
+            "Healthcare": ["UNH", "JNJ", "PFE", "ABBV", "MRK", "LLY"],
+            "Financials": ["JPM", "BAC", "WFC", "GS", "MS", "C"],
+            "Consumer Discretionary": ["AMZN", "TSLA", "HD", "MCD", "NKE", "SBUX"],
+            "Consumer Staples": ["PG", "KO", "PEP", "WMT", "COST", "MDLZ"],
+            "Energy": ["XOM", "CVX", "COP", "SLB", "OXY", "MPC"],
+            "Industrials": ["CAT", "BA", "HON", "UNP", "MMM", "GE"],
+            "Utilities": ["NEE", "DUK", "SO", "D", "EXC", "AEP"]
+        }
+        
         self.sentiment_analyzer = pipeline('sentiment-analysis', 
                                         model='distilbert-base-uncased-finetuned-sst-2-english')
         
@@ -38,52 +50,66 @@ class AdvancedStockPredictor:
                                                     random_state=42)
         self.scaler = StandardScaler()
         self.data_collector = FundamentalDataCollector()
+        self.feature_importance = {}
         
-    def prepare_features(self, stock_data: Dict[str, pd.DataFrame], signals: Dict[str, Any]) -> pd.DataFrame:
-        """Prepare features for model training"""
-        features = []
+    def get_all_tickers(self) -> List[str]:
+        """Get all tickers (both ETFs and individual stocks)"""
+        all_tickers = list(self.sector_etfs.values())
+        for sector_stocks in self.sector_tickers.values():
+            all_tickers.extend(sector_stocks)
+        return all_tickers
         
-        for ticker, data in stock_data.items():
-            if ticker not in signals:
-                continue
-                
-            ticker_features = data.copy()
-            
-            # Convert datetime index to timezone-naive
-            if isinstance(ticker_features.index, pd.DatetimeIndex):
-                if ticker_features.index.tz is not None:
-                    ticker_features.index = ticker_features.index.tz_localize(None)
-            
-            # Add signal features
-            signal = signals[ticker]
-            ticker_features['sentiment_score'] = signal['Sentiment Analysis']['score']
-            ticker_features['relative_strength'] = signal['Relative Strength']['strength']
-            
-            # Add technical signals
-            tech_analysis = signal['Technical Analysis']
-            ticker_features['trend_short'] = 1 if tech_analysis['trend']['short_term'] == 'bullish' else -1
-            ticker_features['trend_long'] = 1 if tech_analysis['trend']['long_term'] == 'bullish' else -1
-            ticker_features['momentum_rsi'] = 1 if tech_analysis['momentum']['rsi'] == 'overbought' else (-1 if tech_analysis['momentum']['rsi'] == 'oversold' else 0)
-            ticker_features['momentum_macd'] = 1 if tech_analysis['momentum']['macd'] == 'bullish' else -1
-            
-            # Add fundamental signals
-            fund_analysis = signal['Fundamental Analysis']
-            ticker_features['gdp_growth'] = 1 if fund_analysis['gdp_growth'] == 'positive' else -1
-            ticker_features['unemployment'] = 1 if fund_analysis['unemployment'] == 'low' else -1
-            ticker_features['inflation'] = 1 if fund_analysis['inflation'] == 'low' else -1
-            ticker_features['yield_curve'] = 1 if fund_analysis['yield_curve'] == 'normal' else -1
-            
-            features.append(ticker_features)
-            
-        return pd.concat(features, axis=0)
+    def prepare_features(self, stock_data: pd.DataFrame, economic_data: pd.DataFrame = None, 
+                        sentiment_score: float = 0.0) -> pd.DataFrame:
+        """Prepare features for model training with enhanced feature set"""
+        features = pd.DataFrame()
         
-    def train_models(self, sector_data=None, sentiment_results=None, start_date='2018-01-01'):
+        # Price-based features
+        features['return_1d'] = stock_data['Close'].pct_change()
+        features['return_5d'] = stock_data['Close'].pct_change(5)
+        features['return_20d'] = stock_data['Close'].pct_change(20)
+        features['return_60d'] = stock_data['Close'].pct_change(60)
+        
+        # Volume features
+        features['volume_ratio'] = stock_data['Volume'] / stock_data['Volume'].rolling(20).mean()
+        features['volume_trend'] = stock_data['Volume'].pct_change(5)
+        
+        # Volatility features
+        features['volatility_5d'] = features['return_1d'].rolling(5).std()
+        features['volatility_20d'] = features['return_1d'].rolling(20).std()
+        
+        # Technical indicators
+        features['RSI'] = ta.momentum.RSIIndicator(stock_data['Close']).rsi()
+        macd = ta.trend.MACD(stock_data['Close'])
+        features['MACD'] = macd.macd_diff()
+        features['MACD_Signal'] = macd.macd_signal()
+        
+        bb = ta.volatility.BollingerBands(stock_data['Close'])
+        features['BB_width'] = (bb.bollinger_hband() - bb.bollinger_lband()) / stock_data['Close']
+        
+        # Add economic indicators if available
+        if economic_data is not None:
+            for col in economic_data.columns:
+                features[f'econ_{col}'] = economic_data[col].reindex(stock_data.index).ffill()
+        
+        # Add sentiment score
+        features['sentiment'] = sentiment_score
+        
+        # Handle missing values
+        features = features.fillna(method='ffill').fillna(0)
+        
+        return features
+        
+    def train_models(self, start_date: str = '2018-01-01'):
         """Train short-term and long-term prediction models with enhanced data"""
         print("Collecting enhanced historical and fundamental data...")
         
+        # Get all tickers
+        all_tickers = self.get_all_tickers()
+        
         # Collect enhanced data
         collected_data = self.data_collector.collect_all_data(
-            self.sector_etfs.values(), 
+            all_tickers, 
             start_date=start_date
         )
         
@@ -91,34 +117,47 @@ class AdvancedStockPredictor:
         y_short_all = []
         y_long_all = []
         
-        for sector, ticker in self.sector_etfs.items():
-            stock_data = collected_data['stock_data'].get(ticker)
-            if stock_data is None:
-                continue
-                
-            # Get sentiment scores
-            sector_sentiment = sentiment_results.get(sector, {'sentiment': 0.0})['sentiment']
+        # Process ETFs
+        for sector, etf in self.sector_etfs.items():
+            self._process_ticker_data(collected_data, sector, etf, X_all, y_short_all, y_long_all, is_etf=True)
+        
+        # Process individual stocks
+        for sector, tickers in self.sector_tickers.items():
+            for ticker in tickers:
+                self._process_ticker_data(collected_data, sector, ticker, X_all, y_short_all, y_long_all, is_etf=False)
+        
+        # Convert to numpy arrays and train models
+        if X_all and y_short_all and y_long_all:
+            self._train_final_models(X_all, y_short_all, y_long_all)
+        
+    def _process_ticker_data(self, collected_data: Dict, sector: str, ticker: str, 
+                           X_all: List, y_short_all: List, y_long_all: List, is_etf: bool):
+        """Process data for a single ticker"""
+        stock_data = collected_data['stock_data'].get(ticker)
+        if stock_data is None:
+            return
             
-            # Prepare features with fundamental data
-            features = self.prepare_features(
-                stock_data=stock_data,
-                economic_data=collected_data['economic_indicators'],
-                sentiment_score=sector_sentiment
-            )
+            # Prepare features
+        features = self.prepare_features(
+            stock_data=stock_data,
+            economic_data=collected_data.get('economic_indicators'),
+            sentiment_score=collected_data.get('sentiment', {}).get(sector, 0.0)
+        )
             
             # Create labels
-            short_term_returns = stock_data['Close'].pct_change(periods=63)  # ~3 months
-            long_term_returns = stock_data['Close'].pct_change(periods=252)  # ~1 year
-            
-            # Remove rows with NaN values
-            valid_idx = ~(features.isna().any(axis=1) | short_term_returns.isna() | long_term_returns.isna())
-            
-            if valid_idx.sum() > 0:
-                X_all.extend(features[valid_idx].values)
-                y_short_all.extend((short_term_returns[valid_idx] > 0).astype(int))
-                y_long_all.extend((long_term_returns[valid_idx] > 0).astype(int))
+        short_term_returns = stock_data['Close'].pct_change(periods=63)  # ~3 months
+        long_term_returns = stock_data['Close'].pct_change(periods=252)  # ~1 year
         
-        # Convert to numpy arrays
+        # Remove rows with NaN values
+        valid_idx = ~(features.isna().any(axis=1) | short_term_returns.isna() | long_term_returns.isna())
+        
+        if valid_idx.sum() > 0:
+            X_all.extend(features[valid_idx].values)
+            y_short_all.extend((short_term_returns[valid_idx] > 0).astype(int))
+            y_long_all.extend((long_term_returns[valid_idx] > 0).astype(int))
+            
+    def _train_final_models(self, X_all: List, y_short_all: List, y_long_all: List):
+        """Train final models with processed data"""
         X_all = np.array(X_all)
         y_short_all = np.array(y_short_all)
         y_long_all = np.array(y_long_all)
@@ -131,10 +170,30 @@ class AdvancedStockPredictor:
         self.short_term_model.fit(X_scaled, y_short_all)
         self.long_term_model.fit(X_scaled, y_long_all)
         
+        # Store feature importance
+        feature_names = ['return_1d', 'return_5d', 'return_20d', 'return_60d',
+                        'volume_ratio', 'volume_trend', 'volatility_5d', 'volatility_20d',
+                        'RSI', 'MACD', 'MACD_Signal', 'BB_width', 'sentiment']
+        
+        self.feature_importance = dict(zip(feature_names, 
+                                         self.short_term_model.feature_importances_))
+        
         print("Model training completed!")
         
-    def predict_sector(self, sector, ticker, sentiment_score):
-        """Make predictions using enhanced feature set"""
+    def predict(self, ticker: str, sector: str = None) -> Dict[str, Any]:
+        """Make predictions for any ticker (ETF or individual stock)"""
+        # Determine if ticker is ETF or individual stock
+        is_etf = ticker in self.sector_etfs.values()
+        if not is_etf and not any(ticker in stocks for stocks in self.sector_tickers.values()):
+            raise ValueError(f"Ticker {ticker} not found in supported tickers")
+            
+        # If sector not provided, find it
+        if sector is None:
+            if is_etf:
+                sector = next(k for k, v in self.sector_etfs.items() if v == ticker)
+            else:
+                sector = next(k for k, v in self.sector_tickers.items() if ticker in v)
+        
         # Collect recent data
         collected_data = self.data_collector.collect_all_data(
             [ticker],
@@ -147,20 +206,25 @@ class AdvancedStockPredictor:
             
         # Prepare features
         features = self.prepare_features(
-            stock_data=stock_data.iloc[-1:],
-            economic_data=collected_data['economic_indicators'],
-            sentiment_score=sentiment_score
+            stock_data=stock_data,
+            economic_data=collected_data.get('economic_indicators'),
+            sentiment_score=collected_data.get('sentiment', {}).get(sector, 0.0)
         )
         
+        # Get latest feature values
+        latest_features = features.iloc[-1:].values
+        
         # Scale features
-        X_scaled = self.scaler.transform(features)
+        X_scaled = self.scaler.transform(latest_features)
         
         # Make predictions
         short_term_prob = self.short_term_model.predict_proba(X_scaled)[0]
         long_term_prob = self.long_term_model.predict_proba(X_scaled)[0]
         
         return {
+            'ticker': ticker,
             'sector': sector,
+            'type': 'ETF' if is_etf else 'Stock',
             'short_term': {
                 'prediction': 'Bullish' if short_term_prob[1] > 0.6 else 'Bearish' if short_term_prob[1] < 0.4 else 'Neutral',
                 'confidence': float(max(short_term_prob)),
@@ -172,101 +236,159 @@ class AdvancedStockPredictor:
                 'probability': float(long_term_prob[1])
             },
             'technical_indicators': {
-                'RSI': float(features['RSI'].iloc[-1]) if 'RSI' in features else None,
-                'MACD': float(features['MACD'].iloc[-1]) if 'MACD' in features else None,
-                'Volatility': float(features['Volatility'].iloc[-1]) if 'Volatility' in features else None
+                'RSI': float(features['RSI'].iloc[-1]),
+                'MACD': float(features['MACD'].iloc[-1]),
+                'BB_width': float(features['BB_width'].iloc[-1]),
+                'volatility': float(features['volatility_20d'].iloc[-1])
             },
-            'economic_indicators': {
-                indicator: float(features[name].iloc[-1]) if name in features else None
-                for indicator, name in self.data_collector.fred_indicators.items()
-            }
+            'feature_importance': self.feature_importance
         }
         
-    def generate_portfolio_recommendation(self, predictions, risk_tolerance='moderate'):
-        """Generate portfolio recommendations based on enhanced predictions"""
+    def generate_portfolio_recommendation(self, risk_tolerance: str = 'moderate') -> Dict[str, Any]:
+        """Generate comprehensive portfolio recommendations including both ETFs and stocks"""
         risk_weights = {
-            'conservative': {'short_term': 0.2, 'long_term': 0.8},
-            'moderate': {'short_term': 0.4, 'long_term': 0.6},
-            'aggressive': {'short_term': 0.6, 'long_term': 0.4}
+            'conservative': {'short_term': 0.2, 'long_term': 0.8, 'etf_weight': 0.7},
+            'moderate': {'short_term': 0.4, 'long_term': 0.6, 'etf_weight': 0.5},
+            'aggressive': {'short_term': 0.6, 'long_term': 0.4, 'etf_weight': 0.3}
         }
         
         weights = risk_weights.get(risk_tolerance, risk_weights['moderate'])
         
-        # Calculate sector scores with enhanced metrics
-        sector_scores = {}
-        for sector, pred in predictions.items():
-            # Calculate technical score
-            tech_indicators = pred['technical_indicators']
-            tech_score = 0
-            if tech_indicators['RSI'] is not None:
-                tech_score += 1 if 40 <= tech_indicators['RSI'] <= 60 else -1
-            if tech_indicators['MACD'] is not None:
-                tech_score += 1 if tech_indicators['MACD'] > 0 else -1
-                
-            # Calculate prediction scores
-            short_score = (1 if pred['short_term']['prediction'] == 'Bullish' else 
-                         -1 if pred['short_term']['prediction'] == 'Bearish' else 0)
-            long_score = (1 if pred['long_term']['prediction'] == 'Bullish' else 
-                         -1 if pred['long_term']['prediction'] == 'Bearish' else 0)
-            
-            # Combine scores with risk weights
-            weighted_score = (
-                short_score * weights['short_term'] * pred['short_term']['confidence'] +
-                long_score * weights['long_term'] * pred['long_term']['confidence'] +
-                tech_score * 0.2  # Technical analysis weight
-            )
-            
-            sector_scores[sector] = weighted_score
-            
-        # Sort sectors by score
-        sorted_sectors = sorted(sector_scores.items(), key=lambda x: x[1], reverse=True)
-        
-        # Generate recommendations
         recommendations = {
-            'top_sectors': [],
-            'neutral_sectors': [],
-            'avoid_sectors': []
+            'etfs': {'top': [], 'neutral': [], 'avoid': []},
+            'stocks': {'top': [], 'neutral': [], 'avoid': []},
+            'sector_allocation': {},
+            'risk_profile': risk_tolerance
         }
         
-        for sector, score in sorted_sectors:
-            if score > 0.3:
-                recommendations['top_sectors'].append({
-                    'sector': sector,
-                    'score': score,
-                    'etf': self.sector_etfs[sector],
-                    'confidence': predictions[sector]['long_term']['confidence'],
-                    'technical_indicators': predictions[sector]['technical_indicators'],
-                    'economic_indicators': predictions[sector].get('economic_indicators', {})
-                })
-            elif score < -0.3:
-                recommendations['avoid_sectors'].append({
-                    'sector': sector,
-                    'score': score,
-                    'etf': self.sector_etfs[sector],
-                    'confidence': predictions[sector]['long_term']['confidence'],
-                    'technical_indicators': predictions[sector]['technical_indicators'],
-                    'economic_indicators': predictions[sector].get('economic_indicators', {})
-                })
-            else:
-                recommendations['neutral_sectors'].append({
-                    'sector': sector,
-                    'score': score,
-                    'etf': self.sector_etfs[sector],
-                    'confidence': predictions[sector]['long_term']['confidence'],
-                    'technical_indicators': predictions[sector]['technical_indicators'],
-                    'economic_indicators': predictions[sector].get('economic_indicators', {})
-                })
+        # Process ETFs
+        for sector, etf in self.sector_etfs.items():
+            pred = self.predict(etf, sector)
+            if pred:
+                self._categorize_prediction(pred, recommendations['etfs'], weights)
+                
+        # Process individual stocks
+        for sector, tickers in self.sector_tickers.items():
+            sector_score = 0
+            for ticker in tickers:
+                pred = self.predict(ticker, sector)
+                if pred:
+                    self._categorize_prediction(pred, recommendations['stocks'], weights)
+                    sector_score += self._calculate_score(pred, weights)
+            
+            # Calculate sector allocation
+            recommendations['sector_allocation'][sector] = {
+                'score': sector_score / len(tickers),
+                'suggested_weight': max(0, min(0.3, (sector_score / len(tickers) + 1) / 2))
+            }
                 
         return recommendations
 
-def save_models(predictor, base_path='.'):
+    def _categorize_prediction(self, pred: Dict[str, Any], target: Dict[str, List], weights: Dict[str, float]):
+        """Categorize a prediction into top/neutral/avoid"""
+        score = self._calculate_score(pred, weights)
+        
+        result = {
+            'ticker': pred['ticker'],
+            'sector': pred['sector'],
+            'score': score,
+            'short_term': pred['short_term'],
+            'long_term': pred['long_term'],
+            'technical_indicators': pred['technical_indicators']
+        }
+        
+        if score > 0.3:
+            target['top'].append(result)
+        elif score < -0.3:
+            target['avoid'].append(result)
+        else:
+            target['neutral'].append(result)
+            
+    def _calculate_score(self, pred: Dict[str, Any], weights: Dict[str, float]) -> float:
+        """Calculate overall score for a prediction"""
+        short_score = (1 if pred['short_term']['prediction'] == 'Bullish' else 
+                      -1 if pred['short_term']['prediction'] == 'Bearish' else 0)
+        long_score = (1 if pred['long_term']['prediction'] == 'Bullish' else 
+                     -1 if pred['long_term']['prediction'] == 'Bearish' else 0)
+        
+        # Technical score
+        tech_score = 0
+        if 30 <= pred['technical_indicators']['RSI'] <= 70:  # Not overbought/oversold
+            tech_score += 0.5
+        if pred['technical_indicators']['MACD'] > 0:  # Positive MACD
+            tech_score += 0.5
+            
+        return (short_score * weights['short_term'] * pred['short_term']['confidence'] +
+                long_score * weights['long_term'] * pred['long_term']['confidence'] +
+                tech_score * 0.2)  # Technical analysis weight
+
+def save_models(predictor: AdvancedStockPredictor, base_path: str = '.'):
     """Save trained models and scaler"""
     joblib.dump(predictor.short_term_model, f'{base_path}/stock_short_term_model.pkl')
     joblib.dump(predictor.long_term_model, f'{base_path}/stock_long_term_model.pkl')
     joblib.dump(predictor.scaler, f'{base_path}/stock_scaler.pkl')
 
-def load_models(predictor, base_path='.'):
+def load_models(predictor: AdvancedStockPredictor, base_path: str = '.'):
     """Load trained models and scaler"""
     predictor.short_term_model = joblib.load(f'{base_path}/stock_short_term_model.pkl')
     predictor.long_term_model = joblib.load(f'{base_path}/stock_long_term_model.pkl')
     predictor.scaler = joblib.load(f'{base_path}/stock_scaler.pkl') 
+
+if __name__ == "__main__":
+    # Initialize predictor
+    print("Initializing Advanced Stock Predictor...")
+    predictor = AdvancedStockPredictor()
+    
+    # Load pre-trained models
+    print("Loading pre-trained models...")
+    load_models(predictor)
+    
+    # Generate predictions for all sectors
+    print("\nGenerating predictions for all sectors...")
+    
+    for sector, stocks in predictor.sector_tickers.items():
+        print(f"\n=== {sector} Sector ===")
+        
+        # First show sector ETF
+        etf = predictor.sector_etfs[sector]
+        try:
+            pred = predictor.predict(etf, sector)
+            print(f"\n{etf} (Sector ETF):")
+            print(f"Short-term (3m): {pred['short_term']['prediction']} (Confidence: {pred['short_term']['confidence']:.2f})")
+            print(f"Long-term (1y): {pred['long_term']['prediction']} (Confidence: {pred['long_term']['confidence']:.2f})")
+            print(f"Technical - RSI: {pred['technical_indicators']['RSI']:.2f}, MACD: {pred['technical_indicators']['MACD']:.2f}")
+        except Exception as e:
+            print(f"Error predicting {etf}: {str(e)}")
+        
+        # Then show individual stocks
+        for ticker in stocks:
+            try:
+                pred = predictor.predict(ticker, sector)
+                print(f"\n{ticker}:")
+                print(f"Short-term (3m): {pred['short_term']['prediction']} (Confidence: {pred['short_term']['confidence']:.2f})")
+                print(f"Long-term (1y): {pred['long_term']['prediction']} (Confidence: {pred['long_term']['confidence']:.2f})")
+                print(f"Technical - RSI: {pred['technical_indicators']['RSI']:.2f}, MACD: {pred['technical_indicators']['MACD']:.2f}")
+            except Exception as e:
+                print(f"Error predicting {ticker}: {str(e)}")
+    
+    # Generate portfolio recommendation
+    print("\n=== Portfolio Recommendations ===")
+    portfolio = predictor.generate_portfolio_recommendation(risk_tolerance='moderate')
+    
+    # Print sector allocations
+    print("\nRecommended Sector Allocations:")
+    for sector, allocation in portfolio['sector_allocation'].items():
+        print(f"{sector}: {allocation['suggested_weight']*100:.1f}%")
+    
+    # Print top picks by sector
+    print("\nTop Picks by Sector:")
+    sector_picks = {}
+    for stock in portfolio['stocks']['top']:
+        if stock['sector'] not in sector_picks:
+            sector_picks[stock['sector']] = []
+        sector_picks[stock['sector']].append((stock['ticker'], stock['score']))
+    
+    for sector, picks in sector_picks.items():
+        print(f"\n{sector}:")
+        for ticker, score in sorted(picks, key=lambda x: x[1], reverse=True)[:2]:  # Show top 2 per sector
+            print(f"{ticker}: Score = {score:.2f}") 
