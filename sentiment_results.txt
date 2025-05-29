@@ -1,0 +1,10 @@
+USA News Sentiments:
+Overall Market Sentiment | Sentiment: POSITIVE | Confidence: 0.75
+Technology Sector | Sentiment: POSITIVE | Confidence: 0.82
+Healthcare Sector | Sentiment: NEUTRAL | Confidence: 0.65
+Financial Sector | Sentiment: POSITIVE | Confidence: 0.71
+Consumer Discretionary | Sentiment: NEUTRAL | Confidence: 0.68
+Consumer Staples | Sentiment: POSITIVE | Confidence: 0.77
+Energy Sector | Sentiment: NEGATIVE | Confidence: 0.73
+Industrial Sector | Sentiment: POSITIVE | Confidence: 0.69
+Utilities Sector | Sentiment: NEUTRAL | Confidence: 0.70 

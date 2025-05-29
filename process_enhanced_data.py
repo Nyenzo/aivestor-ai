@@ -1,173 +1,305 @@
 import pandas as pd
 import numpy as np
-import json
 from datetime import datetime
-from typing import Dict, Any
+import json
 import os
+from sklearn.preprocessing import StandardScaler
+import ta
 
-class DataProcessor:
+class EnhancedDataProcessor:
     def __init__(self):
-        self.market_data = None
-        self.economic_data = None
-        self.fundamental_data = None
+        self.sector_etfs = {
+            'Technology': 'XLK',
+            'Healthcare': 'XLV',
+            'Financials': 'XLF',
+            'Consumer Discretionary': 'XLY',
+            'Consumer Staples': 'XLP',
+            'Energy': 'XLE',
+            'Industrials': 'XLI',
+            'Utilities': 'XLU'
+        }
         
-    def load_data(self):
-        """Load all collected data"""
+        # Add sector tickers for individual stocks
+        self.sector_tickers = {
+            "Technology": ["AAPL", "MSFT", "NVDA", "GOOGL", "META", "ADBE"],
+            "Healthcare": ["UNH", "JNJ", "PFE", "ABBV", "MRK", "LLY"],
+            "Financials": ["JPM", "BAC", "WFC", "GS", "MS", "C"],
+            "Consumer Discretionary": ["AMZN", "TSLA", "HD", "MCD", "NKE", "SBUX"],
+            "Consumer Staples": ["PG", "KO", "PEP", "WMT", "COST", "MDLZ"],
+            "Energy": ["XOM", "CVX", "COP", "SLB", "OXY", "MPC"],
+            "Industrials": ["CAT", "BA", "HON", "UNP", "MMM", "GE"],
+            "Utilities": ["NEE", "DUK", "SO", "D", "EXC", "AEP"]
+        }
+        self.scaler = StandardScaler()
+        
+    def load_market_data(self):
+        """Load the collected market data"""
+        market_data = {}
+        
+        # Load market sentiment
         try:
-            # Load market data
             with open('market_data.json', 'r') as f:
-                market_data = json.load(f)
-                self.market_data = {k: pd.DataFrame.from_dict(v, orient='split') 
-                                  for k, v in market_data.items()}
+                market_data['sentiment'] = json.load(f)
+        except FileNotFoundError:
+            print("Market sentiment data not found")
+            market_data['sentiment'] = {}
             
-            # Load economic data
-            with open('economic_data.json', 'r') as f:
-                self.economic_data = json.load(f)
-                
-            # Load fundamental data
-            with open('fundamental_data.json', 'r') as f:
-                self.fundamental_data = json.load(f)
-                
-        except Exception as e:
-            print(f"Error loading data: {e}")
-            return False
-            
-        return True
+        # Load stock data for both ETFs and individual stocks
+        stock_data = {}
         
-    def process_market_data(self):
-        """Process market data and calculate additional features"""
-        processed_data = {}
+        # Load ETF data
+        for sector, ticker in self.sector_etfs.items():
+            files = [f for f in os.listdir() if f.startswith(f'stock_data_{ticker}_')]
+            if files:
+                latest_file = max(files)
+                stock_data[ticker] = pd.read_csv(latest_file)
+                stock_data[ticker]['Date'] = pd.to_datetime(stock_data[ticker]['Date'], utc=True)
+                stock_data[ticker].set_index('Date', inplace=True)
+                stock_data[ticker]['Type'] = 'ETF'
+                stock_data[ticker]['Sector'] = sector
         
-        for sector, df in self.market_data.items():
-            # Calculate momentum indicators
-            df['Momentum_1M'] = df['Close'].pct_change(periods=21)  # 21 trading days
-            df['Momentum_3M'] = df['Close'].pct_change(periods=63)  # 63 trading days
-            df['Momentum_6M'] = df['Close'].pct_change(periods=126)  # 126 trading days
-            
-            # Calculate volume indicators
-            df['Volume_MA20'] = df['Volume'].rolling(window=20).mean()
-            df['Volume_Ratio'] = df['Volume'] / df['Volume_MA20']
-            
-            # Calculate price channels
-            df['High_20d'] = df['High'].rolling(window=20).max()
-            df['Low_20d'] = df['Low'].rolling(window=20).min()
-            df['Channel_Position'] = (df['Close'] - df['Low_20d']) / (df['High_20d'] - df['Low_20d'])
-            
-            processed_data[sector] = df
-            
-        return processed_data
+        # Load individual stock data
+        for sector, tickers in self.sector_tickers.items():
+            for ticker in tickers:
+                files = [f for f in os.listdir() if f.startswith(f'stock_data_{ticker}_')]
+                if files:
+                    latest_file = max(files)
+                    stock_data[ticker] = pd.read_csv(latest_file)
+                    stock_data[ticker]['Date'] = pd.to_datetime(stock_data[ticker]['Date'], utc=True)
+                    stock_data[ticker].set_index('Date', inplace=True)
+                    stock_data[ticker]['Type'] = 'Stock'
+                    stock_data[ticker]['Sector'] = sector
+                    
+        market_data['stock_data'] = stock_data
         
-    def process_economic_data(self):
-        """Process economic indicators and calculate trends"""
-        processed_econ = {}
-        
-        for indicator, data in self.economic_data.items():
-            if isinstance(data, dict):  # Convert dictionary to Series if needed
-                series = pd.Series(data)
-                series.index = pd.to_datetime(series.index)
-            else:
-                series = pd.Series(data)
-                
-            # Calculate YoY change
-            processed_econ[f"{indicator}_YoY"] = series.pct_change(periods=12)
+        # Load economic indicators with enhanced handling
+        econ_files = [f for f in os.listdir() if f.startswith('economic_indicators_')]
+        if econ_files:
+            latest_econ = max(econ_files)
+            economic_data = pd.read_csv(latest_econ)
+            if 'Unnamed: 0' in economic_data.columns:  # Handle index column if present
+                economic_data.set_index('Unnamed: 0', inplace=True)
+                economic_data.index.name = 'Date'
+            economic_data.index = pd.to_datetime(economic_data.index, utc=True)
             
-            # Calculate 3-month trend
-            processed_econ[f"{indicator}_3M_Trend"] = series.rolling(window=3).mean()
+            # Calculate additional derived indicators
+            if 'Fed_Funds_Rate' in economic_data.columns and '10Y_Treasury' in economic_data.columns:
+                economic_data['Yield_Curve'] = economic_data['10Y_Treasury'] - economic_data['Fed_Funds_Rate']
             
-        return processed_econ
+            if 'GDP' in economic_data.columns:
+                economic_data['GDP_Growth'] = economic_data['GDP'].pct_change()
+            
+            if 'Nonfarm_Payrolls' in economic_data.columns:
+                economic_data['Payrolls_Change'] = economic_data['Nonfarm_Payrolls'].pct_change()
+            
+            market_data['economic'] = economic_data
+            
+        return market_data
         
-    def process_fundamental_data(self):
-        """Process fundamental data and calculate sector averages"""
-        processed_fundamentals = {}
+    def calculate_technical_indicators(self, df):
+        """Calculate or update technical indicators for a dataframe"""
+        # Trend Indicators
+        df['SMA_20'] = ta.trend.sma_indicator(df['Close'], window=20)
+        df['SMA_50'] = ta.trend.sma_indicator(df['Close'], window=50)
+        df['SMA_200'] = ta.trend.sma_indicator(df['Close'], window=200)
+        df['EMA_20'] = ta.trend.ema_indicator(df['Close'], window=20)
         
-        for sector, companies in self.fundamental_data.items():
-            sector_metrics = {
-                'Avg_PE': [],
-                'Avg_PB': [],
-                'Avg_Dividend_Yield': [],
-                'Total_Market_Cap': [],
-                'Avg_Revenue_Growth': []
+        # Momentum Indicators
+        df['RSI'] = ta.momentum.RSIIndicator(df['Close']).rsi()
+        macd = ta.trend.MACD(df['Close'])
+        df['MACD'] = macd.macd()
+        df['MACD_Signal'] = macd.macd_signal()
+        df['MACD_Hist'] = macd.macd_diff()
+        
+        # Volatility Indicators
+        bb = ta.volatility.BollingerBands(df['Close'])
+        df['BB_upper'] = bb.bollinger_hband()
+        df['BB_lower'] = bb.bollinger_lband()
+        df['BB_width'] = (df['BB_upper'] - df['BB_lower']) / df['Close']
+        df['ATR'] = ta.volatility.AverageTrueRange(df['High'], df['Low'], df['Close']).average_true_range()
+        
+        # Volume Indicators
+        df['OBV'] = ta.volume.OnBalanceVolumeIndicator(df['Close'], df['Volume']).on_balance_volume()
+        df['Volume_SMA'] = df['Volume'].rolling(window=20).mean()
+        
+        return df
+        
+    def prepare_features(self, market_data, lookback_periods=[5, 10, 20, 50]):
+        """Prepare features for model training with enhanced feature set"""
+        features = {}
+        
+        for ticker, df in market_data['stock_data'].items():
+            # Calculate returns for multiple timeframes
+            for period in lookback_periods:
+                df[f'return_{period}d'] = df['Close'].pct_change(period)
+                df[f'volume_{period}d_avg'] = df['Volume'].rolling(period).mean()
+                df[f'volatility_{period}d'] = df['Close'].pct_change().rolling(period).std()
+            
+            # Add technical indicators
+            df = self.calculate_technical_indicators(df)
+            
+            # Add economic indicators if available
+            if 'economic' in market_data:
+                economic_data = market_data['economic']
+                # Resample economic data to match stock data frequency
+                for col in economic_data.columns:
+                    if col != 'Date':
+                        df[f'econ_{col}'] = economic_data[col].reindex(df.index, method='ffill')
+            
+            # Add sector-specific sentiment
+            sector = df['Sector'].iloc[0]  # Get sector from the dataframe
+            if 'sentiment' in market_data and 'market_sentiment' in market_data['sentiment']:
+                sentiment = market_data['sentiment']['market_sentiment'].get(sector, 0)
+                df['sentiment_score'] = sentiment
+            
+            # Add relative strength vs sector
+            sector_etf = self.sector_etfs[sector]
+            if sector_etf in market_data['stock_data']:
+                etf_data = market_data['stock_data'][sector_etf]
+                df['relative_strength'] = df['Close'] / df['Close'].iloc[0] / (etf_data['Close'] / etf_data['Close'].iloc[0])
+            
+            # Handle missing values
+            df.ffill(inplace=True)  # Forward fill
+            df.bfill(inplace=True)  # Backward fill for any remaining NAs at the start
+            df.fillna(0, inplace=True)  # For any still remaining NAs
+            
+            features[ticker] = df
+            
+        return features
+        
+    def generate_signals(self, features):
+        """Generate trading signals with enhanced analysis"""
+        signals = {}
+        
+        for ticker, df in features.items():
+            signals[ticker] = {
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'technical': {},
+                'fundamental': {},
+                'sentiment': {},
+                'relative': {},
+                'combined': {}
             }
             
-            for company, metrics in companies.items():
-                if metrics['PE_Ratio']:
-                    sector_metrics['Avg_PE'].append(metrics['PE_Ratio'])
-                if metrics['PB_Ratio']:
-                    sector_metrics['Avg_PB'].append(metrics['PB_Ratio'])
-                if metrics['Dividend_Yield']:
-                    sector_metrics['Avg_Dividend_Yield'].append(metrics['Dividend_Yield'])
-                if metrics['Market_Cap']:
-                    sector_metrics['Total_Market_Cap'].append(metrics['Market_Cap'])
-                if metrics['Revenue_Growth']:
-                    sector_metrics['Avg_Revenue_Growth'].append(metrics['Revenue_Growth'])
-            
-            # Calculate averages
-            processed_fundamentals[sector] = {
-                'Avg_PE': np.mean(sector_metrics['Avg_PE']) if sector_metrics['Avg_PE'] else None,
-                'Avg_PB': np.mean(sector_metrics['Avg_PB']) if sector_metrics['Avg_PB'] else None,
-                'Avg_Dividend_Yield': np.mean(sector_metrics['Avg_Dividend_Yield']) if sector_metrics['Avg_Dividend_Yield'] else None,
-                'Total_Market_Cap': sum(sector_metrics['Total_Market_Cap']) if sector_metrics['Total_Market_Cap'] else None,
-                'Avg_Revenue_Growth': np.mean(sector_metrics['Avg_Revenue_Growth']) if sector_metrics['Avg_Revenue_Growth'] else None
+            # Technical Signals
+            signals[ticker]['technical'] = {
+                'trend': {
+                    'short_term': 'bullish' if df['SMA_20'].iloc[-1] > df['SMA_50'].iloc[-1] else 'bearish',
+                    'long_term': 'bullish' if df['Close'].iloc[-1] > df['SMA_200'].iloc[-1] else 'bearish'
+                },
+                'momentum': {
+                    'rsi': 'overbought' if df['RSI'].iloc[-1] > 70 else 'oversold' if df['RSI'].iloc[-1] < 30 else 'neutral',
+                    'macd': 'bullish' if df['MACD_Hist'].iloc[-1] > 0 else 'bearish'
+                },
+                'volatility': {
+                    'level': 'high' if df['BB_width'].iloc[-1] > df['BB_width'].mean() else 'low',
+                    'bollinger': 'overbought' if df['Close'].iloc[-1] > df['BB_upper'].iloc[-1] else 
+                               'oversold' if df['Close'].iloc[-1] < df['BB_lower'].iloc[-1] else 'neutral'
+                }
             }
             
-        return processed_fundamentals
-        
-    def combine_all_data(self):
-        """Combine all processed data into final dataset for model training"""
-        if not self.load_data():
-            return None
+            # Fundamental Signals
+            if any(col.startswith('econ_') for col in df.columns):
+                gdp_growth = df['econ_GDP_Growth'].iloc[-1] if 'econ_GDP_Growth' in df.columns else 0
+                unemployment = df['econ_Unemployment'].iloc[-1] if 'econ_Unemployment' in df.columns else 0
+                inflation = df['econ_Inflation'].iloc[-1] if 'econ_Inflation' in df.columns else 0
+                yield_curve = df['econ_Yield_Curve'].iloc[-1] if 'econ_Yield_Curve' in df.columns else 0
+                
+                signals[ticker]['fundamental'] = {
+                    'gdp_growth': 'positive' if gdp_growth > 0 else 'negative',
+                    'unemployment': 'high' if unemployment > 6 else 'moderate' if unemployment > 4 else 'low',
+                    'inflation': 'high' if inflation > 3 else 'moderate' if inflation > 2 else 'low',
+                    'yield_curve': 'normal' if yield_curve > 0 else 'inverted'
+                }
             
-        # Process all data sources
-        market_data = self.process_market_data()
-        economic_data = self.process_economic_data()
-        fundamental_data = self.process_fundamental_data()
-        
-        # Create combined dataset for each sector
-        combined_data = {}
-        
-        for sector in market_data.keys():
-            sector_df = market_data[sector].copy()
+            # Sentiment Signals
+            if 'sentiment_score' in df.columns:
+                sentiment = df['sentiment_score'].iloc[-1]
+                signals[ticker]['sentiment'] = {
+                    'score': sentiment,
+                    'indication': 'bullish' if sentiment > 0.2 else 'bearish' if sentiment < -0.2 else 'neutral'
+                }
             
-            # Add economic indicators
-            for indicator, values in economic_data.items():
-                if isinstance(values, pd.Series):
-                    # Resample economic data to match market data frequency
-                    resampled = values.resample('D').ffill()
-                    # Align with market data dates
-                    aligned = resampled.reindex(sector_df.index, method='ffill')
-                    sector_df[indicator] = aligned
-                    
-            # Add fundamental data
-            if sector in fundamental_data:
-                for metric, value in fundamental_data[sector].items():
-                    sector_df[metric] = value
-                    
-            combined_data[sector] = sector_df
+            # Relative Strength Signals
+            if 'relative_strength' in df.columns:
+                rel_strength = df['relative_strength'].iloc[-1]
+                signals[ticker]['relative'] = {
+                    'vs_sector': 'outperforming' if rel_strength > 1.05 else 
+                                'underperforming' if rel_strength < 0.95 else 'neutral',
+                    'strength': rel_strength
+                }
             
-        return combined_data
-        
-    def save_processed_data(self, data: Dict[str, pd.DataFrame], filename: str):
-        """Save processed data to file"""
-        try:
-            # Convert DataFrames to dictionary format
-            serializable_data = {k: v.to_dict(orient='split') for k, v in data.items()}
+            # Combined Signal
+            technical_score = (
+                (1 if signals[ticker]['technical']['trend']['short_term'] == 'bullish' else -1) +
+                (1 if signals[ticker]['technical']['trend']['long_term'] == 'bullish' else -1) +
+                (1 if signals[ticker]['technical']['momentum']['macd'] == 'bullish' else -1)
+            )
             
-            with open(filename, 'w') as f:
-                json.dump(serializable_data, f)
-            print(f"Successfully saved processed data to {filename}")
+            fundamental_score = sum([
+                1 if 'fundamental' in signals[ticker] and signals[ticker]['fundamental']['gdp_growth'] == 'positive' else -1,
+                1 if 'fundamental' in signals[ticker] and signals[ticker]['fundamental']['yield_curve'] == 'normal' else -1,
+                -1 if 'fundamental' in signals[ticker] and signals[ticker]['fundamental']['inflation'] == 'high' else 0
+            ])
             
-        except Exception as e:
-            print(f"Error saving processed data: {e}")
+            sentiment_score = 1 if 'sentiment' in signals[ticker] and signals[ticker]['sentiment']['indication'] == 'bullish' else \
+                            -1 if 'sentiment' in signals[ticker] and signals[ticker]['sentiment']['indication'] == 'bearish' else 0
             
+            relative_score = 1 if 'relative' in signals[ticker] and signals[ticker]['relative']['vs_sector'] == 'outperforming' else \
+                           -1 if 'relative' in signals[ticker] and signals[ticker]['relative']['vs_sector'] == 'underperforming' else 0
+            
+            total_score = technical_score + fundamental_score + sentiment_score + relative_score
+            
+            signals[ticker]['combined'] = {
+                'score': total_score,
+                'recommendation': 'strong_buy' if total_score >= 3 else
+                                'buy' if total_score > 0 else
+                                'strong_sell' if total_score <= -3 else
+                                'sell' if total_score < 0 else 'hold',
+                'confidence': abs(total_score) / 8  # Normalize confidence score
+            }
+            
+        return signals
+
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, (np.int_, np.intc, np.intp, np.int8,
+            np.int16, np.int32, np.int64, np.uint8,
+            np.uint16, np.uint32, np.uint64)):
+            return int(obj)
+        elif isinstance(obj, (np.float_, np.float16, np.float32, np.float64)):
+            return float(obj)
+        elif isinstance(obj, (np.ndarray,)):
+            return obj.tolist()
+        return json.JSONEncoder.default(self, obj)
+
 def main():
-    processor = DataProcessor()
-    combined_data = processor.combine_all_data()
+    processor = EnhancedDataProcessor()
+    print("Loading market data...")
+    market_data = processor.load_market_data()
     
-    if combined_data:
-        processor.save_processed_data(combined_data, 'enhanced_processed_data.json')
-        print("Data processing completed successfully!")
-    else:
-        print("Error processing data!")
-        
+    print("\nPreparing features...")
+    features = processor.prepare_features(market_data)
+    
+    print("\nGenerating signals...")
+    signals = processor.generate_signals(features)
+    
+    print("\nSignals Summary:")
+    for ticker, signal in signals.items():
+        print(f"\n{ticker} ({signal.get('Type', 'Unknown')} - {signal.get('Sector', 'Unknown')}):")
+        print(f"Technical Analysis: {signal['technical']}")
+        if signal['fundamental']:
+            print(f"Fundamental Analysis: {signal['fundamental']}")
+        if signal['sentiment']:
+            print(f"Sentiment Analysis: {signal['sentiment']}")
+        if signal['relative']:
+            print(f"Relative Strength: {signal['relative']}")
+        print(f"Combined Recommendation: {signal['combined']['recommendation']} (Confidence: {signal['combined']['confidence']:.2f})")
+    
+    # Save signals to file with custom encoder
+    with open('fundamental_data.json', 'w') as f:
+        json.dump(signals, f, indent=4, cls=NumpyEncoder)
+    print("\nSignals saved to fundamental_data.json")
+
 if __name__ == "__main__":
-    main() 
+    main()

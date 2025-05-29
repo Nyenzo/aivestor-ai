@@ -1,0 +1,11 @@
+{
+    "collection_date": "2025-05-29 14:19:04",
+    "market_sentiment": {
+        "Technology": 1.0,
+        "Healthcare": -1.0,
+        "Consumer Discretionary": -1.0,
+        "Consumer Staples": 1.0,
+        "Energy": -1.0,
+        "Utilities": -1.0
+    }
+}
