@@ -2,6 +2,14 @@
 import pandas as pd
 from transformers import pipeline
 import torch
+from dotenv import load_dotenv
+import os
+from transformers import pipeline
+import re
+
+# Load environment variables
+load_dotenv()
+SENTIMENT_API_KEY = os.getenv("SENTIMENT_API_KEY")  # For future use
 
 # Step 1: Load the processed data from processed_data.txt
 def load_processed_data(file_path):

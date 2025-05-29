@@ -1,7 +1,13 @@
 # Import libraries
+import os
+from dotenv import load_dotenv
 import json
 import yfinance as yf
-import time  # For adding delays
+import time
+
+# Load environment variables
+load_dotenv()
+ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY")  # For future use
 
 # Step 1: Load Sentiment and Bill Analysis Results
 def load_sentiment_results(file_path):
