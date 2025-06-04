@@ -138,6 +138,48 @@ class EnhancedDataProcessor:
             # Add technical indicators
             df = self.calculate_technical_indicators(df)
             
+            # Add fundamental data if available
+            try:
+                fundamental_data = self.load_fundamental_data(ticker)
+                if fundamental_data:
+                    # Valuation Metrics
+                    df['PE_Ratio'] = fundamental_data.get('PE_Ratio')
+                    df['PB_Ratio'] = fundamental_data.get('PB_Ratio')
+                    df['PS_Ratio'] = fundamental_data.get('PS_Ratio')
+                    df['PEG_Ratio'] = fundamental_data.get('PEG_Ratio')
+                    
+                    # Financial Health
+                    df['Debt_to_Equity'] = fundamental_data.get('Debt_to_Equity')
+                    df['Current_Ratio'] = fundamental_data.get('Current_Ratio')
+                    df['Quick_Ratio'] = fundamental_data.get('Quick_Ratio')
+                    
+                    # Profitability
+                    df['ROE'] = fundamental_data.get('ROE')
+                    df['ROA'] = fundamental_data.get('ROA')
+                    df['Profit_Margin'] = fundamental_data.get('Profit_Margin')
+                    df['Operating_Margin'] = fundamental_data.get('Operating_Margin')
+                    
+                    # Growth & Performance
+                    df['EPS'] = fundamental_data.get('EPS')
+                    df['EPS_Growth'] = fundamental_data.get('EPS_Growth')
+                    df['Revenue_Growth'] = fundamental_data.get('Revenue_Growth')
+                    
+                    # Dividend Information
+                    df['Dividend_Yield'] = fundamental_data.get('Dividend_Yield')
+                    df['Dividend_Rate'] = fundamental_data.get('Dividend_Rate')
+                    df['Payout_Ratio'] = fundamental_data.get('Payout_Ratio')
+                    
+                    # Cash Flow Analysis
+                    df['Free_Cash_Flow'] = fundamental_data.get('Free_Cash_Flow')
+                    df['Operating_Cash_Flow'] = fundamental_data.get('Operating_Cash_Flow')
+                    
+                    # Market Position
+                    df['Market_Cap'] = fundamental_data.get('Market_Cap')
+                    df['Enterprise_Value'] = fundamental_data.get('Enterprise_Value')
+                    df['Beta'] = fundamental_data.get('Beta')
+            except Exception as e:
+                print(f"Error loading fundamental data for {ticker}: {e}")
+            
             # Add economic indicators if available
             if 'economic' in market_data:
                 economic_data = market_data['economic']
@@ -146,11 +188,16 @@ class EnhancedDataProcessor:
                     if col != 'Date':
                         df[f'econ_{col}'] = economic_data[col].reindex(df.index, method='ffill')
             
-            # Add sector-specific sentiment
-            sector = df['Sector'].iloc[0]  # Get sector from the dataframe
-            if 'sentiment' in market_data and 'market_sentiment' in market_data['sentiment']:
-                sentiment = market_data['sentiment']['market_sentiment'].get(sector, 0)
-                df['sentiment_score'] = sentiment
+            # Add sector-specific sentiment and industry trends
+            sector = df['Sector'].iloc[0]
+            try:
+                industry_trends = self.load_industry_trends(sector)
+                if industry_trends:
+                    df['sector_performance'] = industry_trends.get('Sector_Performance', {}).get('YTD_Return')
+                    df['sector_volatility'] = industry_trends.get('Sector_Performance', {}).get('Volatility')
+                    df['sector_volume_trend'] = industry_trends.get('Sector_Performance', {}).get('Volume_Trend')
+            except Exception as e:
+                print(f"Error loading industry trends for {sector}: {e}")
             
             # Add relative strength vs sector
             sector_etf = self.sector_etfs[sector]
@@ -166,6 +213,32 @@ class EnhancedDataProcessor:
             features[ticker] = df
             
         return features
+        
+    def load_fundamental_data(self, ticker):
+        """Load fundamental data for a specific ticker"""
+        try:
+            with open('fundamental_data.json', 'r') as f:
+                fundamental_data = json.load(f)
+                
+            # Find the sector for this ticker
+            sector = next((sector for sector, tickers in self.sector_tickers.items() 
+                         if ticker in tickers), None)
+            
+            if sector and sector in fundamental_data:
+                return fundamental_data[sector].get(ticker)
+        except Exception as e:
+            print(f"Error loading fundamental data: {e}")
+        return None
+        
+    def load_industry_trends(self, sector):
+        """Load industry trends for a specific sector"""
+        try:
+            with open('industry_trends.json', 'r') as f:
+                trends_data = json.load(f)
+                return trends_data.get(sector)
+        except Exception as e:
+            print(f"Error loading industry trends: {e}")
+        return None
         
     def generate_signals(self, features):
         """Generate trading signals with enhanced analysis"""
@@ -199,64 +272,61 @@ class EnhancedDataProcessor:
             }
             
             # Fundamental Signals
-            if any(col.startswith('econ_') for col in df.columns):
-                gdp_growth = df['econ_GDP_Growth'].iloc[-1] if 'econ_GDP_Growth' in df.columns else 0
-                unemployment = df['econ_Unemployment'].iloc[-1] if 'econ_Unemployment' in df.columns else 0
-                inflation = df['econ_Inflation'].iloc[-1] if 'econ_Inflation' in df.columns else 0
-                yield_curve = df['econ_Yield_Curve'].iloc[-1] if 'econ_Yield_Curve' in df.columns else 0
-                
+            if 'PE_Ratio' in df.columns:
                 signals[ticker]['fundamental'] = {
-                    'gdp_growth': 'positive' if gdp_growth > 0 else 'negative',
-                    'unemployment': 'high' if unemployment > 6 else 'moderate' if unemployment > 4 else 'low',
-                    'inflation': 'high' if inflation > 3 else 'moderate' if inflation > 2 else 'low',
-                    'yield_curve': 'normal' if yield_curve > 0 else 'inverted'
+                    'valuation': {
+                        'pe_ratio': 'high' if df['PE_Ratio'].iloc[-1] > 25 else 'low' if df['PE_Ratio'].iloc[-1] < 15 else 'moderate',
+                        'pb_ratio': 'high' if df['PB_Ratio'].iloc[-1] > 3 else 'low' if df['PB_Ratio'].iloc[-1] < 1 else 'moderate',
+                        'dividend_yield': 'high' if df['Dividend_Yield'].iloc[-1] > 0.04 else 'low' if df['Dividend_Yield'].iloc[-1] < 0.02 else 'moderate'
+                    },
+                    'financial_health': {
+                        'debt_equity': 'high' if df['Debt_to_Equity'].iloc[-1] > 2 else 'low' if df['Debt_to_Equity'].iloc[-1] < 1 else 'moderate',
+                        'current_ratio': 'strong' if df['Current_Ratio'].iloc[-1] > 2 else 'weak' if df['Current_Ratio'].iloc[-1] < 1 else 'moderate'
+                    },
+                    'growth': {
+                        'revenue': 'strong' if df['Revenue_Growth'].iloc[-1] > 0.1 else 'weak' if df['Revenue_Growth'].iloc[-1] < 0 else 'moderate',
+                        'eps': 'strong' if df['EPS_Growth'].iloc[-1] > 0.1 else 'weak' if df['EPS_Growth'].iloc[-1] < 0 else 'moderate'
+                    },
+                    'profitability': {
+                        'roe': 'strong' if df['ROE'].iloc[-1] > 0.15 else 'weak' if df['ROE'].iloc[-1] < 0.1 else 'moderate',
+                        'profit_margin': 'strong' if df['Profit_Margin'].iloc[-1] > 0.2 else 'weak' if df['Profit_Margin'].iloc[-1] < 0.1 else 'moderate'
+                    }
                 }
             
-            # Sentiment Signals
-            if 'sentiment_score' in df.columns:
-                sentiment = df['sentiment_score'].iloc[-1]
-                signals[ticker]['sentiment'] = {
-                    'score': sentiment,
-                    'indication': 'bullish' if sentiment > 0.2 else 'bearish' if sentiment < -0.2 else 'neutral'
-                }
+            # Combine all signals for final recommendation
+            bullish_signals = 0
+            total_signals = 0
             
-            # Relative Strength Signals
-            if 'relative_strength' in df.columns:
-                rel_strength = df['relative_strength'].iloc[-1]
-                signals[ticker]['relative'] = {
-                    'vs_sector': 'outperforming' if rel_strength > 1.05 else 
-                                'underperforming' if rel_strength < 0.95 else 'neutral',
-                    'strength': rel_strength
-                }
+            # Count technical signals
+            for category in signals[ticker]['technical'].values():
+                if isinstance(category, dict):
+                    for signal in category.values():
+                        total_signals += 1
+                        if signal in ['bullish', 'strong', 'oversold']:
+                            bullish_signals += 1
+                        elif signal in ['bearish', 'weak', 'overbought']:
+                            bullish_signals -= 1
             
-            # Combined Signal
-            technical_score = (
-                (1 if signals[ticker]['technical']['trend']['short_term'] == 'bullish' else -1) +
-                (1 if signals[ticker]['technical']['trend']['long_term'] == 'bullish' else -1) +
-                (1 if signals[ticker]['technical']['momentum']['macd'] == 'bullish' else -1)
-            )
+            # Count fundamental signals
+            if 'fundamental' in signals[ticker]:
+                for category in signals[ticker]['fundamental'].values():
+                    if isinstance(category, dict):
+                        for signal in category.values():
+                            total_signals += 1
+                            if signal in ['strong', 'low']:  # low for valuation metrics is good
+                                bullish_signals += 1
+                            elif signal in ['weak', 'high']:  # high for valuation metrics is bad
+                                bullish_signals -= 1
             
-            fundamental_score = sum([
-                1 if 'fundamental' in signals[ticker] and signals[ticker]['fundamental']['gdp_growth'] == 'positive' else -1,
-                1 if 'fundamental' in signals[ticker] and signals[ticker]['fundamental']['yield_curve'] == 'normal' else -1,
-                -1 if 'fundamental' in signals[ticker] and signals[ticker]['fundamental']['inflation'] == 'high' else 0
-            ])
-            
-            sentiment_score = 1 if 'sentiment' in signals[ticker] and signals[ticker]['sentiment']['indication'] == 'bullish' else \
-                            -1 if 'sentiment' in signals[ticker] and signals[ticker]['sentiment']['indication'] == 'bearish' else 0
-            
-            relative_score = 1 if 'relative' in signals[ticker] and signals[ticker]['relative']['vs_sector'] == 'outperforming' else \
-                           -1 if 'relative' in signals[ticker] and signals[ticker]['relative']['vs_sector'] == 'underperforming' else 0
-            
-            total_score = technical_score + fundamental_score + sentiment_score + relative_score
-            
+            # Generate final recommendation
+            sentiment_score = bullish_signals / total_signals if total_signals > 0 else 0
             signals[ticker]['combined'] = {
-                'score': total_score,
-                'recommendation': 'strong_buy' if total_score >= 3 else
-                                'buy' if total_score > 0 else
-                                'strong_sell' if total_score <= -3 else
-                                'sell' if total_score < 0 else 'hold',
-                'confidence': abs(total_score) / 8  # Normalize confidence score
+                'sentiment_score': sentiment_score,
+                'recommendation': 'strong_buy' if sentiment_score > 0.5 else
+                                'buy' if sentiment_score > 0.2 else
+                                'strong_sell' if sentiment_score < -0.5 else
+                                'sell' if sentiment_score < -0.2 else
+                                'hold'
             }
             
         return signals
@@ -286,20 +356,23 @@ def main():
     
     print("\nSignals Summary:")
     for ticker, signal in signals.items():
-        print(f"\n{ticker} ({signal.get('Type', 'Unknown')} - {signal.get('Sector', 'Unknown')}):")
+        print(f"\n{ticker}:")
         print(f"Technical Analysis: {signal['technical']}")
-        if signal['fundamental']:
+        if 'fundamental' in signal and signal['fundamental']:
             print(f"Fundamental Analysis: {signal['fundamental']}")
-        if signal['sentiment']:
+        if 'sentiment' in signal and signal['sentiment']:
             print(f"Sentiment Analysis: {signal['sentiment']}")
-        if signal['relative']:
+        if 'relative' in signal and signal['relative']:
             print(f"Relative Strength: {signal['relative']}")
-        print(f"Combined Recommendation: {signal['combined']['recommendation']} (Confidence: {signal['combined']['confidence']:.2f})")
+        print(f"Combined Recommendation: {signal['combined']['recommendation']} (Score: {signal['combined']['sentiment_score']:.2f})")
     
     # Save signals to file with custom encoder
-    with open('fundamental_data.json', 'w') as f:
-        json.dump(signals, f, indent=4, cls=NumpyEncoder)
-    print("\nSignals saved to fundamental_data.json")
+    try:
+        with open('signals_output.json', 'w') as f:
+            json.dump(signals, f, indent=4, cls=NumpyEncoder)
+        print("\nSignals saved to signals_output.json")
+    except Exception as e:
+        print(f"\nError saving signals: {e}")
         
 if __name__ == "__main__":
     main() 

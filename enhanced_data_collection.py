@@ -117,42 +117,153 @@ class EnhancedDataCollector:
         return economic_data
     
     def fetch_sector_fundamentals(self):
-        """Fetch fundamental data for major companies in each sector"""
+        """Fetch comprehensive fundamental data for companies in each sector"""
         fundamentals = {}
         
-        for sector, etf in self.sector_etfs.items():
-            try:
-                # Get ETF holdings
-                etf_ticker = yf.Ticker(etf)
-                holdings = etf_ticker.get_holdings()
+        for sector, tickers in self.sector_tickers.items():
+            print(f"\nCollecting fundamental data for {sector} sector...")
+            sector_fundamentals = {}
+            
+            for ticker in tickers:
+                try:
+                    stock = yf.Ticker(ticker)
+                    info = stock.info
+                    
+                    # Get financial statements
+                    income_stmt = stock.income_stmt
+                    balance_sheet = stock.balance_sheet
+                    cash_flow = stock.cash_flow
+                    
+                    # Calculate comprehensive fundamental metrics
+                    fundamentals_data = {
+                        # Valuation Metrics
+                        'PE_Ratio': info.get('forwardPE', None),
+                        'PB_Ratio': info.get('priceToBook', None),
+                        'PS_Ratio': info.get('priceToSalesTrailing12Months', None),
+                        'PEG_Ratio': info.get('pegRatio', None),
+                        
+                        # Financial Health
+                        'Debt_to_Equity': info.get('debtToEquity', None),
+                        'Current_Ratio': info.get('currentRatio', None),
+                        'Quick_Ratio': info.get('quickRatio', None),
+                        
+                        # Profitability
+                        'ROE': info.get('returnOnEquity', None),
+                        'ROA': info.get('returnOnAssets', None),
+                        'Profit_Margin': info.get('profitMargins', None),
+                        'Operating_Margin': info.get('operatingMargins', None),
+                        
+                        # Growth & Performance
+                        'EPS': info.get('trailingEPS', None),
+                        'EPS_Growth': info.get('earningsGrowth', None),
+                        'Revenue_Growth': info.get('revenueGrowth', None),
+                        
+                        # Dividend Information
+                        'Dividend_Yield': info.get('dividendYield', None),
+                        'Dividend_Rate': info.get('dividendRate', None),
+                        'Payout_Ratio': info.get('payoutRatio', None),
+                        
+                        # Cash Flow Analysis
+                        'Free_Cash_Flow': cash_flow.loc['Free Cash Flow'].iloc[0] if not cash_flow.empty else None,
+                        'Operating_Cash_Flow': cash_flow.loc['Operating Cash Flow'].iloc[0] if not cash_flow.empty else None,
+                        
+                        # Market Position
+                        'Market_Cap': info.get('marketCap', None),
+                        'Enterprise_Value': info.get('enterpriseValue', None),
+                        
+                        # Additional Metrics
+                        'Beta': info.get('beta', None),
+                        'Shares_Outstanding': info.get('sharesOutstanding', None)
+                    }
+                    
+                    # Add company-specific qualitative data
+                    company_info = {
+                        'Industry': info.get('industry', None),
+                        'Sector': info.get('sector', None),
+                        'Business_Summary': info.get('longBusinessSummary', None),
+                        'Company_Officers': info.get('companyOfficers', None),
+                        'Website': info.get('website', None),
+                        'Full_Time_Employees': info.get('fullTimeEmployees', None)
+                    }
+                    
+                    fundamentals_data['Company_Info'] = company_info
+                    
+                    # Calculate additional ratios and metrics
+                    if income_stmt is not None and not income_stmt.empty:
+                        fundamentals_data['Revenue_Per_Share'] = income_stmt.loc['Total Revenue'].iloc[0] / info.get('sharesOutstanding', 1)
+                    
+                    sector_fundamentals[ticker] = fundamentals_data
+                    print(f"Successfully collected fundamental data for {ticker}")
+                    
+                except Exception as e:
+                    print(f"Error fetching fundamentals for {ticker}: {e}")
+                    sector_fundamentals[ticker] = None
                 
-                if holdings is not None and not holdings.empty:
-                    top_holdings = holdings.head(5)  # Get top 5 holdings
-                    sector_fundamentals = {}
-                    
-                    for _, holding in top_holdings.iterrows():
-                        symbol = holding.name
-                        stock = yf.Ticker(symbol)
-                        
-                        # Get key statistics
-                        info = stock.info
-                        fundamentals_data = {
-                            'PE_Ratio': info.get('forwardPE', None),
-                            'PB_Ratio': info.get('priceToBook', None),
-                            'Dividend_Yield': info.get('dividendYield', None),
-                            'Market_Cap': info.get('marketCap', None),
-                            'Revenue_Growth': info.get('revenueGrowth', None)
-                        }
-                        
-                        sector_fundamentals[symbol] = fundamentals_data
-                    
-                    fundamentals[sector] = sector_fundamentals
-                    print(f"Successfully fetched fundamentals for {sector}")
-                    
-            except Exception as e:
-                print(f"Error fetching fundamentals for {sector}: {e}")
+                # Add delay to avoid rate limiting
+                time.sleep(1)
+            
+            fundamentals[sector] = sector_fundamentals
                 
         return fundamentals
+    
+    def analyze_industry_trends(self, sector):
+        """Analyze industry trends for a specific sector"""
+        sector_etf = self.sector_etfs.get(sector)
+        if not sector_etf:
+            return None
+            
+        try:
+            etf = yf.Ticker(sector_etf)
+            hist = etf.history(period="2y")
+            
+            trends = {
+                'Sector_Performance': {
+                    'YTD_Return': (hist['Close'][-1] / hist['Close'][0] - 1) * 100,
+                    'Volatility': hist['Close'].pct_change().std() * np.sqrt(252) * 100,
+                    'Volume_Trend': hist['Volume'].rolling(window=20).mean()[-1] / hist['Volume'].rolling(window=20).mean()[0]
+                }
+            }
+            
+            # Get sector-specific news and sentiment
+            news = self.get_sector_news(sector)
+            if news:
+                trends['Recent_News'] = news
+            
+            return trends
+            
+        except Exception as e:
+            print(f"Error analyzing industry trends for {sector}: {e}")
+            return None
+
+    def get_sector_news(self, sector, limit=5):
+        """Get recent news articles for a sector"""
+        if not NEWS_API_KEY:
+            return None
+            
+        try:
+            url = f"https://newsapi.org/v2/everything"
+            params = {
+                'q': f"{sector} sector stock market",
+                'apiKey': NEWS_API_KEY,
+                'language': 'en',
+                'sortBy': 'relevancy',
+                'pageSize': limit
+            }
+            
+            response = requests.get(url, params=params)
+            if response.status_code == 200:
+                articles = response.json().get('articles', [])
+                return [{
+                    'title': article['title'],
+                    'description': article['description'],
+                    'publishedAt': article['publishedAt'],
+                    'source': article['source']['name']
+                } for article in articles]
+            return None
+                
+        except Exception as e:
+            print(f"Error fetching news for {sector}: {e}")
+            return None
     
     def _calculate_rsi(self, prices, periods=14):
         """Calculate RSI technical indicator"""
