@@ -1,4 +1,4 @@
-# Collect comprehensive market data including VIX, fundamentals, FRED indicators, and XAUUSD
+# Collecting comprehensive market data including VIX, fundamentals, FRED indicators, and XAUUSD
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -15,23 +15,15 @@ from fredapi import Fred
 class EnhancedDataCollector:
     DATA_DIR = 'datacollection'
 
+    # Initializing the data collector with environment variables and setup
     def __init__(self):
-        # Load .env file
         load_dotenv()
-        
-        # Create data directory
         os.makedirs(self.DATA_DIR, exist_ok=True)
-
-        # Debug environment variables
         print("ALPHA_VANTAGE_API_KEY:", os.getenv('ALPHA_VANTAGE_API_KEY'))
         print("FRED_API_KEY:", os.getenv('FRED_API_KEY'))
         print("NEWSAPI_KEY:", os.getenv('NEWSAPI_KEY'))
-        
-        # Initialize FRED client with environment variable
         self.fred_api_key = os.getenv('FRED_API_KEY')
         self.sentiment_analyzer = pipeline('sentiment-analysis', model='distilbert-base-uncased-finetuned-sst-2-english')
-        
-        # FRED economic indicators
         self.fred_indicators = {
             'GDP': 'GDP',
             'Real_GDP': 'GDPC1',
@@ -52,8 +44,22 @@ class EnhancedDataCollector:
             'Labor_Force_Participation': 'CIVPART'
         }
 
+    # Validating ticker existence before data collection
+    def validate_ticker(self, ticker: str) -> bool:
+        try:
+            stock = yf.Ticker(ticker)
+            info = stock.info
+            return bool(info.get('symbol'))
+        except Exception as e:
+            print(f"Ticker validation failed for {ticker}: {e}")
+            return False
+
+    # Fetching stock price data with caching and enhanced error handling
     def collect_stock_data(self, ticker: str, start_date: str, end_date: str = None) -> pd.DataFrame:
-        # Fetch stock price data with caching
+        if not self.validate_ticker(ticker):
+            print(f"Invalid ticker {ticker}, returning empty DataFrame")
+            return pd.DataFrame(columns=['Date', 'Open', 'High', 'Low', 'Close', 'RSI', 'MACD', 'BB_upper', 'BB_lower', 'ATR'])
+
         cache_file = os.path.join(self.DATA_DIR, f'stock_data_{ticker}.json')
         if os.path.exists(cache_file):
             try:
@@ -63,42 +69,45 @@ class EnhancedDataCollector:
                 if cache_date > datetime.now() - timedelta(days=1):
                     print(f"Using cached data for {ticker}")
                     df = pd.DataFrame(cached_data['data'])
-                    df['Date'] = pd.to_datetime(df['Date'])  # Convert back to datetime
+                    df['Date'] = pd.to_datetime(df['Date'], utc=True)  # Convert to UTC to handle mixed time zones
                     return df
             except Exception as e:
                 print(f"Error loading cache for {ticker}: {e}")
-        
+
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                df = yf.Ticker(ticker).history(start=start_date, end=end_date or datetime.now().strftime('%Y-%m-%d'))
-                if df.empty or 'Date' not in df.columns:
-                    print(f"No data for {ticker}, returning empty DataFrame")
+                df = yf.Ticker(ticker).history(start=start_date, end=end_date)
+                if df.empty:
+                    print(f"No data returned for {ticker}, attempt {attempt + 1}")
+                    if attempt < max_retries - 1:
+                        time.sleep(5)
+                        continue
                     return pd.DataFrame(columns=['Date', 'Open', 'High', 'Low', 'Close', 'RSI', 'MACD', 'BB_upper', 'BB_lower', 'ATR'])
                 df['RSI'] = self.calculate_rsi(df['Close'])
                 df['MACD'] = self.calculate_macd(df['Close'])
                 df['BB_upper'], df['BB_lower'] = self.calculate_bollinger_bands(df['Close'])
                 df['ATR'] = self.calculate_atr(df)
                 df = df.reset_index()
-                df['Date'] = df['Date'].astype(str)  # Convert Timestamp to string for JSON
+                df['Date'] = df['Date'].astype(str)
                 cache_data = {
-                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%M:%S'),
+                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                     'data': df.to_dict(orient='records')
                 }
                 with open(cache_file, 'w') as f:
                     json.dump(cache_data, f)
-                df['Date'] = pd.to_datetime(df['Date'])  # Convert back to datetime for return
+                df['Date'] = pd.to_datetime(df['Date'], utc=True)  # Convert to UTC to handle mixed time zones
                 return df
             except Exception as e:
                 print(f"Attempt {attempt + 1} failed for {ticker}: {e}")
                 if attempt < max_retries - 1:
-                    time.sleep(5)  # Wait 5 seconds before retry
+                    time.sleep(5)
                 else:
                     print(f"Max retries reached for {ticker}, returning empty DataFrame")
                     return pd.DataFrame(columns=['Date', 'Open', 'High', 'Low', 'Close', 'RSI', 'MACD', 'BB_upper', 'BB_lower', 'ATR'])
 
+    # Fetching XAUUSD (gold) data using GLD ETF as a proxy
     def collect_xauusd_data(self, start_date: str, end_date: str = None) -> pd.DataFrame:
-        # Use GLD (Gold ETF) as a proxy for XAUUSD since yfinance doesn't provide forex directly
         ticker = 'GLD'
         cache_file = os.path.join(self.DATA_DIR, 'xauusd_data.json')
         if os.path.exists(cache_file):
@@ -108,14 +117,14 @@ class EnhancedDataCollector:
             if cache_date > datetime.now() - timedelta(days=1):
                 print("Using cached XAUUSD data")
                 df = pd.DataFrame(cached_data['data'])
-                df['Date'] = pd.to_datetime(df['Date'])
+                df['Date'] = pd.to_datetime(df['Date'], utc=True)  # Convert to UTC to handle mixed time zones
                 return df
-        
+
         try:
-            df = yf.Ticker(ticker).history(start=start_date, end=end_date or datetime.now().strftime('%Y-%m-%d'))
-            if df.empty or 'Date' not in df.columns:
+            df = yf.Ticker(ticker).history(start=start_date, end=end_date)
+            if df.empty:
                 print(f"No data for {ticker}, returning default XAUUSD data")
-                dates = pd.date_range(start=start_date, end=end_date or datetime.now(), freq='D')
+                dates = pd.date_range(start=start_date, end=end_date, freq='D')
                 return pd.DataFrame({
                     'Date': dates,
                     'Close': [1800.0]*len(dates),
@@ -135,11 +144,11 @@ class EnhancedDataCollector:
             }
             with open(cache_file, 'w') as f:
                 json.dump(cache_data, f)
-            df['Date'] = pd.to_datetime(df['Date'])
+            df['Date'] = pd.to_datetime(df['Date'], utc=True)  # Convert to UTC to handle mixed time zones
             return df
         except Exception as e:
             print(f"Error fetching XAUUSD data via {ticker}: {e}")
-            dates = pd.date_range(start=start_date, end=end_date or datetime.now(), freq='D')
+            dates = pd.date_range(start=start_date, end=end_date, freq='D')
             return pd.DataFrame({
                 'Date': dates,
                 'Close': [1800.0]*len(dates),
@@ -148,6 +157,7 @@ class EnhancedDataCollector:
                 'Low': [1800.0]*len(dates)
             })
 
+    # Collecting VIX data for market volatility
     def collect_vix_data(self, start_date: str, end_date: str = None) -> pd.DataFrame:
         cache_file = os.path.join(self.DATA_DIR, 'vix_data.csv')
         if os.path.exists(cache_file):
@@ -156,13 +166,13 @@ class EnhancedDataCollector:
                 cache_date = pd.to_datetime(df['timestamp'].iloc[0])
                 if cache_date > datetime.now() - timedelta(days=1):
                     print("Using cached VIX data")
-                    df['Date'] = pd.to_datetime(df['Date'])
+                    df['Date'] = pd.to_datetime(df['Date'], utc=True)  # Convert to UTC to handle mixed time zones
                     return df.drop(columns=['timestamp'])
             except Exception:
                 print("Invalid VIX cache file, fetching new data")
-        
+
         try:
-            vix = yf.Ticker('^VIX').history(start=start_date, end=end_date or datetime.now().strftime('%Y-%m-%d'))
+            vix = yf.Ticker('^VIX').history(start=start_date, end=end_date)
             if not vix.empty:
                 vix_data = vix[['Close']].rename(columns={'Close': 'VIX'})
                 vix_data = vix_data.reset_index()
@@ -174,6 +184,7 @@ class EnhancedDataCollector:
             print(f"Error fetching VIX data: {e}")
             return pd.DataFrame()
 
+    # Collecting fundamental data for stocks
     def collect_fundamental_data(self, ticker: str) -> Dict:
         cache_file = os.path.join(self.DATA_DIR, f'fundamental_data_{ticker}.json')
         if os.path.exists(cache_file):
@@ -186,7 +197,7 @@ class EnhancedDataCollector:
                     return cached_data['data']
             except Exception:
                 print(f"Invalid cache file for {ticker}, fetching new data")
-        
+
         try:
             stock = yf.Ticker(ticker)
             info = stock.info
@@ -212,6 +223,7 @@ class EnhancedDataCollector:
                 'Debt_to_Equity': 1.0
             }
 
+    # Collecting FRED economic data
     def collect_fred_data(self, start_date: str, end_date: str = None) -> pd.DataFrame:
         cache_file = os.path.join(self.DATA_DIR, 'fred_data.csv')
         if os.path.exists(cache_file):
@@ -220,18 +232,18 @@ class EnhancedDataCollector:
                 cache_date = pd.to_datetime(df['timestamp'].iloc[0])
                 if cache_date > datetime.now() - timedelta(days=1):
                     print("Using cached FRED data")
-                    df['Date'] = pd.to_datetime(df['Date'])
+                    df['Date'] = pd.to_datetime(df['Date'], utc=True)  # Convert to UTC to handle mixed time zones
                     return df.drop(columns=['timestamp'])
             except Exception:
                 print("Invalid FRED cache file, fetching new data")
-        
+
         fred = Fred(api_key=os.getenv('FRED_API_KEY')) if os.getenv('FRED_API_KEY') else None
         if not fred:
             print("FRED API key missing, using default data")
-            default_data = {'Date': pd.date_range(start=start_date, end=end_date or datetime.now(), freq='D')}
+            default_data = {'Date': pd.date_range(start=start_date, end=end_date, freq='D')}
             default_data.update({name: [0.0]*len(default_data['Date']) for name in self.fred_indicators})
             return pd.DataFrame(default_data)
-        
+
         economic_data = {}
         for name, series_id in self.fred_indicators.items():
             try:
@@ -241,25 +253,25 @@ class EnhancedDataCollector:
                 time.sleep(0.5)
             except Exception as e:
                 print(f"Error collecting {name}: {e}")
-                economic_data[name] = pd.Series([0.0]*len(pd.date_range(start=start_date, end=end_date or datetime.now(), freq='D')), 
-                                               index=pd.date_range(start=start_date, end=end_date or datetime.now(), freq='D'))
-        
+                economic_data[name] = pd.Series([0.0]*len(pd.date_range(start=start_date, end=end_date, freq='D')),
+                                               index=pd.date_range(start=start_date, end=end_date, freq='D'))
+
         if 'Fed_Funds_Rate' in economic_data and '10Y_Treasury' in economic_data:
             economic_data['Yield_Curve_Spread'] = economic_data['10Y_Treasury'] - economic_data['Fed_Funds_Rate']
         if 'GDP' in economic_data:
             economic_data['GDP_Growth'] = economic_data['GDP'].pct_change()
         if 'Nonfarm_Payrolls' in economic_data:
             economic_data['Employment_Change'] = economic_data['Nonfarm_Payrolls'].pct_change()
-        
+
         df = pd.DataFrame(economic_data)
         df.index.name = 'Date'
         df = df.reset_index()
-        df['Date'] = pd.to_datetime(df['Date'])
-        
+        df['Date'] = pd.to_datetime(df['Date'], utc=True)  # Convert to UTC to handle mixed time zones
         df['timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         df.to_csv(cache_file, index=False)
         return df.drop(columns=['timestamp'])
 
+    # Collecting sector news sentiment
     def collect_sector_news(self, sector: str) -> List[Dict]:
         cache_file = os.path.join(self.DATA_DIR, f'sector_news_{sector}.json')
         if os.path.exists(cache_file):
@@ -269,13 +281,13 @@ class EnhancedDataCollector:
             if cache_date > datetime.now() - timedelta(days=1):
                 print(f"Using cached news for {sector}")
                 return cached_data['data']
-        
+
         from newsapi import NewsApiClient
         newsapi = NewsApiClient(api_key=os.getenv('NEWSAPI_KEY')) if os.getenv('NEWSAPI_KEY') else None
         if not newsapi:
             print(f"NewsAPI key missing for {sector}, returning mock data")
             return [{'title': f'Mock news for {sector}', 'sentiment': 'NEUTRAL', 'score': 0.5}]
-        
+
         try:
             articles = newsapi.get_everything(q=sector, language='en', page_size=20)
             sentiments = []
@@ -297,13 +309,14 @@ class EnhancedDataCollector:
             print(f"Error fetching news for {sector}: {e}")
             return [{'title': f'Mock news for {sector}', 'sentiment': 'NEUTRAL', 'score': 0.5}]
 
+    # Collecting all data for specified tickers and date range
     def collect_all_data(self, start_date: str = '2018-01-01', end_date: str = None, tickers: List[str] = None) -> Dict:
         print(f"Starting data collection for {tickers if tickers else 'all tickers'} from {start_date} to {end_date or 'present'}")
         stock_data = {}
         fundamental_data = {}
         from advanced_stock_predictor import AdvancedStockPredictor
         predictor = AdvancedStockPredictor()
-        
+
         target_tickers = tickers if tickers else predictor.get_all_tickers()
         print(f"Collecting data for {len(target_tickers)} tickers")
         for ticker in target_tickers:
@@ -320,12 +333,12 @@ class EnhancedDataCollector:
             except Exception as e:
                 print(f"Error collecting data for {ticker}: {e}")
                 stock_data[ticker] = pd.DataFrame()
-        
+
         economic_data = self.collect_fred_data(start_date, end_date)
         vix_data = self.collect_vix_data(start_date, end_date)
-        sector_sentiments = {sector: self.collect_sector_news(sector) 
+        sector_sentiments = {sector: self.collect_sector_news(sector)
                            for sector in predictor.sector_etfs.keys()}
-        
+
         print("Data collection complete")
         return {
             'stock_data': stock_data,
@@ -335,6 +348,7 @@ class EnhancedDataCollector:
             'market_sentiment': sector_sentiments
         }
 
+    # Calculating RSI for price analysis
     def calculate_rsi(self, prices: pd.Series, period: int = 14) -> pd.Series:
         delta = prices.diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -342,12 +356,14 @@ class EnhancedDataCollector:
         rs = gain / loss
         return 100 - (100 / (1 + rs))
 
+    # Calculating MACD for trend analysis
     def calculate_macd(self, prices: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> pd.Series:
         exp1 = prices.ewm(span=fast, adjust=False).mean()
         exp2 = prices.ewm(span=slow, adjust=False).mean()
         macd = exp1 - exp2
         return macd
 
+    # Calculating Bollinger Bands for volatility analysis
     def calculate_bollinger_bands(self, prices: pd.Series, window: int = 20, num_std: int = 2) -> tuple:
         sma = prices.rolling(window=window).mean()
         std = prices.rolling(window=window).std()
@@ -355,6 +371,7 @@ class EnhancedDataCollector:
         lower = sma - (std * num_std)
         return upper, lower
 
+    # Calculating ATR for volatility measurement
     def calculate_atr(self, df: pd.DataFrame, period: int = 14) -> pd.Series:
         high_low = df['High'] - df['Low']
         high_close = np.abs(df['High'] - df['Close'].shift())
@@ -363,19 +380,19 @@ class EnhancedDataCollector:
         return tr.rolling(window=period).mean()
 
 if __name__ == "__main__":
-    # Clear cache to ensure fresh data
+    # Clearing cache to ensure fresh data collection
     data_dir = 'datacollection'
     os.makedirs(data_dir, exist_ok=True)
     for file in os.listdir(data_dir):
         if file.endswith('.json') or file in ['fred_data.csv', 'vix_data.csv']:
             os.remove(os.path.join(data_dir, file))
             print(f"Removed cache file: {file}")
-    
-    # Collect data
+
+    # Collecting data for the specified date range
     collector = EnhancedDataCollector()
-    data = collector.collect_all_data(start_date='2022-06-05', end_date='2024-12-31')
+    data = collector.collect_all_data(start_date='2019-05-01', end_date='2025-05-30')
     
-    # Save data for next step
+    # Saving collected data for downstream processing
     with open(os.path.join(data_dir, 'collected_data.pkl'), 'wb') as f:
         pickle.dump(data, f)
     print("Saved collected data to 'datacollection/collected_data.pkl'")
