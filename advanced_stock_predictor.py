@@ -1,196 +1,186 @@
-# Core class for stock price prediction and portfolio recommendations with expanded sectors
-import numpy as np
+# Managing stock predictions and outputting results
 import pandas as pd
-from datetime import datetime, timedelta
-from typing import Dict, Any, List
-from sklearn.ensemble import GradientBoostingClassifier
+import numpy as np
+import pickle
+import os
+import yfinance as yf
+from typing import List, Dict
 from sklearn.preprocessing import StandardScaler
-import joblib
-from enhanced_data_collection import EnhancedDataCollector
-from process_enhanced_data import EnhancedDataProcessor
 
 class AdvancedStockPredictor:
+    MODEL_DIR = 'models'
+    TICKERS = [
+        'AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'TSLA', 'NVDA', 'AMD', 'INTC', 'TSM', 'QCOM',
+        'PFE', 'ABBV', 'LLY', 'MRK', 'JNJ', 'T', 'VZ', 'TMUS', 'CMCSA', 'CHTR', 'XOM', 'CVX',
+        'COP', 'BP', 'SHEL', 'WMT', 'TGT', 'COST', 'HD', 'LOW', 'JPM', 'BAC', 'WFC', 'C', 'GS',
+        'V', 'MA', 'AXP', 'PG', 'KO', 'PEP', 'NKE', 'MCD', 'CAT', 'DE', 'MMM', 'BA', 'GE',
+        'NFLX', 'DIS', 'SPOT', 'ROKU', 'LIN', 'SHW', 'FCX', 'ECL', 'GLD', 'USO', 'XAUUSD'
+    ]
+    SECTOR_ETFS = {
+        'Technology': 'XLK',
+        'Health': 'XLV',
+        'Energy': 'XLE',
+        'Consumer': 'XLY',
+        'Financials': 'XLF',
+        'Communication': 'XLC',
+        'Utilities': 'XLU',
+        'Industrials': 'XLI',
+        'Materials': 'XLB',
+        'Consumer Staples': 'XLP',
+        'Retail': 'XRT',
+        'Real Estate': 'XLRE'
+    }
+
+    # Initializing the predictor with ticker and sector mappings
     def __init__(self):
-        # Initialize sector ETFs and tickers, including Streaming Services and deduplicated Commodities
-        self.sector_etfs = {
-            'Technology': 'XLK',
-            'Healthcare': 'XLV',
-            'Financials': 'XLF',
-            'Consumer Discretionary': 'XLY',
-            'Consumer Staples': 'XLP',
-            'Energy': 'XLE',
-            'Industrials': 'XLI',
-            'Utilities': 'XLU',
-            'Materials': 'XLB',
-            'Communication Services': 'XLC',
-            'Streaming Services': 'FDN',
-            'Real Estate': 'XLRE',
-            'Commodities_Gold': 'GLD',
-            'Commodities_Oil': 'USO',
-            'Commodities_Silver': 'SLV',
-            'Retail': 'XRT'
-        }
-        self.sector_tickers = {
-            'Technology': ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'META', 'ADBE'],
-            'Healthcare': ['UNH', 'JNJ', 'PFE', 'ABBV', 'MRK', 'LLY'],
-            'Financials': ['JPM', 'BAC', 'WFC', 'GS', 'MS', 'C'],
-            'Consumer Discretionary': ['AMZN', 'TSLA', 'HD', 'MCD', 'NKE', 'SBUX'],
-            'Consumer Staples': ['PG', 'KO', 'PEP', 'WMT', 'COST', 'MDLZ'],
-            'Energy': ['XOM', 'CVX', 'COP', 'SLB', 'OXY', 'MPC'],
-            'Industrials': ['CAT', 'BA', 'HON', 'UNP', 'MMM', 'GE'],
-            'Utilities': ['NEE', 'DUK', 'SO', 'D', 'EXC', 'AEP'],
-            'Materials': ['DOW', 'NUE', 'FCX', 'APD', 'ECL'],
-            'Communication Services': ['T', 'VZ', 'TMUS', 'LUMN', 'CHTR'],
-            'Streaming Services': ['DIS', 'NFLX', 'SPOT', 'ROKU', 'WBD'],
-            'Real Estate': ['SPG', 'AMT', 'PLD', 'CCI', 'EQIX'],
-            'Commodities_Gold': ['NEM', 'GOLD', 'WPM', 'RGLD', 'FNV', 'XAUUSD'],
-            'Commodities_Oil': ['EOG', 'PXD', 'DVN', 'FANG', 'HES'],  # Deduplicated
-            'Commodities_Silver': ['PAAS', 'AG', 'SVM', 'HL', 'EXK'],
-            'Retail': ['WMT', 'TGT', 'COST', 'LOW', 'TJX']
-        }
-        self.short_term_model = GradientBoostingClassifier(
-            n_estimators=200, learning_rate=0.1, max_depth=5, random_state=42
-        )
-        self.long_term_model = GradientBoostingClassifier(
-            n_estimators=200, learning_rate=0.1, max_depth=5, random_state=42
-        )
-        self.scaler = StandardScaler()
-        self.data_collector = EnhancedDataCollector()
-        self.data_processor = EnhancedDataProcessor()
-        self.feature_importance = {}
+        self.short_term_model = None
+        self.long_term_model = None
+        self.scaler = None
+        self.sector_mappings = self._create_sector_mappings()
 
+    # Creating a mapping of tickers to their respective sectors
+    def _create_sector_mappings(self) -> Dict[str, str]:
+        mappings = {
+            'AAPL': 'Technology', 'MSFT': 'Technology', 'AMZN': 'Consumer', 'GOOGL': 'Technology',
+            'META': 'Technology', 'TSLA': 'Consumer', 'NVDA': 'Technology', 'AMD': 'Technology',
+            'INTC': 'Technology', 'TSM': 'Technology', 'QCOM': 'Technology', 'PFE': 'Health',
+            'ABBV': 'Health', 'LLY': 'Health', 'MRK': 'Health', 'JNJ': 'Health', 'T': 'Communication',
+            'VZ': 'Communication', 'TMUS': 'Communication', 'CMCSA': 'Communication',
+            'CHTR': 'Communication', 'XOM': 'Energy', 'CVX': 'Energy', 'COP': 'Energy', 'BP': 'Energy',
+            'SHEL': 'Energy', 'WMT': 'Consumer Staples', 'TGT': 'Consumer Staples',
+            'COST': 'Consumer Staples', 'HD': 'Consumer', 'LOW': 'Consumer', 'JPM': 'Financials',
+            'BAC': 'Financials', 'WFC': 'Financials', 'C': 'Financials', 'GS': 'Financials',
+            'V': 'Financials', 'MA': 'Financials', 'AXP': 'Financials', 'PG': 'Consumer Staples',
+            'KO': 'Consumer Staples', 'PEP': 'Consumer Staples', 'NKE': 'Consumer',
+            'MCD': 'Consumer', 'CAT': 'Industrials', 'DE': 'Industrials', 'MMM': 'Industrials',
+            'BA': 'Industrials', 'GE': 'Industrials', 'NFLX': 'Communication', 'DIS': 'Communication',
+            'SPOT': 'Communication', 'ROKU': 'Communication', 'LIN': 'Materials', 'SHW': 'Materials',
+            'FCX': 'Materials', 'ECL': 'Materials', 'GLD': 'Materials', 'USO': 'Energy',
+            'XAUUSD': 'Materials', 'XLK': 'Technology', 'XLV': 'Health', 'XLE': 'Energy',
+            'XLY': 'Consumer', 'XLF': 'Financials', 'XLC': 'Communication', 'XLU': 'Utilities',
+            'XLI': 'Industrials', 'XLB': 'Materials', 'XLP': 'Consumer Staples', 'XRT': 'Retail',
+            'XLRE': 'Real Estate'
+        }
+        return mappings
+
+    # Loading trained models and scaler for predictions
+    def load_models(self):
+        try:
+            with open(os.path.join(self.MODEL_DIR, 'short_term_model.pkl'), 'rb') as f:
+                self.short_term_model = pickle.load(f)
+            with open(os.path.join(self.MODEL_DIR, 'long_term_model.pkl'), 'rb') as f:
+                self.long_term_model = pickle.load(f)
+            with open(os.path.join(self.MODEL_DIR, 'scaler.pkl'), 'rb') as f:
+                self.scaler = pickle.load(f)
+            print("Loaded models and scaler")
+        except FileNotFoundError:
+            print("Error: Trained models not found. Please run train_enhanced_model_cv.py first.")
+            raise
+
+    # Computing technical indicators for a DataFrame
+    def _compute_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        try:
+            df['RSI'] = (df['Close'].diff().where(lambda x: x > 0, 0).rolling(window=14).mean() /
+                         df['Close'].diff().where(lambda x: x < 0, 0).rolling(window=14).mean() * -100 + 100)
+            df['MACD'] = df['Close'].ewm(span=12, adjust=False).mean() - df['Close'].ewm(span=26, adjust=False).mean()
+            df['BB_upper'] = df['Close'].rolling(window=20).mean() + 2 * df['Close'].rolling(window=20).std()
+            df['BB_lower'] = df['Close'].rolling(window=20).mean() - 2 * df['Close'].rolling(window=20).std()
+            df['ATR'] = (df['High'] - df['Low']).rolling(window=14).mean()
+            return df
+        except Exception as e:
+            print(f"Error computing indicators: {e}")
+            return df
+
+    # Retrieving all available tickers
     def get_all_tickers(self) -> List[str]:
-        # Retrieve all tickers across sectors and ETFs
-        tickers = list(self.sector_etfs.values())
-        for stocks in self.sector_tickers.values():
-            tickers.extend(stocks)
-        return list(set(tickers))
+        return sorted(list(set(self.TICKERS + list(self.SECTOR_ETFS.values()))))
 
-    def train_models(self, start_date: str = '2018-01-01'):
-        # Train short-term and long-term models using enhanced data
-        print("Collecting enhanced historical and fundamental data...")
-        collected_data = self.data_collector.collect_all_data(start_date=start_date)
-        print("\nProcessing collected data...")
-        processed_features = self.data_processor.prepare_features(collected_data)
-        
-        X_all = []
-        y_short_all = []
-        y_long_all = []
-        feature_names = []
-        
-        print("\nPreparing training data...")
-        for ticker, features_df in processed_features.items():
-            if len(features_df) < 252:
-                continue
-            if not feature_names:
-                feature_names = [col for col in features_df.columns 
-                               if col not in ['Date', 'Type', 'Sector', 'Open', 'High', 'Low', 'Close', 'Volume']]
-            X = features_df[feature_names].values
-            short_term_returns = features_df['Close'].pct_change(periods=63)
-            long_term_returns = features_df['Close'].pct_change(periods=252)
-            valid_idx = ~(np.isnan(X).any(axis=1) | np.isnan(short_term_returns) | np.isnan(long_term_returns))
-            if valid_idx.sum() > 0:
-                X_all.extend(X[valid_idx])
-                y_short_all.extend((short_term_returns[valid_idx] > 0).astype(int))
-                y_long_all.extend((long_term_returns[valid_idx] > 0).astype(int))
-        
-        X_all = np.array(X_all)
-        y_short_all = np.array(y_short_all)
-        y_long_all = np.array(y_long_all)
-        
-        print("\nScaling features and training models...")
-        X_scaled = self.scaler.fit_transform(X_all)
-        
-        self.short_term_model.fit(X_scaled, y_short_all)
-        self.long_term_model.fit(X_scaled, y_long_all)
-        
-        self.feature_importance = dict(zip(feature_names, 
-                                         self.short_term_model.feature_importances_))
-        
-        print("\nModel training completed!")
-        print("\nTop 10 most important features:")
-        sorted_features = sorted(self.feature_importance.items(), 
-                               key=lambda x: x[1], reverse=True)[:10]
-        for feature, importance in sorted_features:
-            print(f"{feature}: {importance:.4f}")
+    # Mapping a ticker to its sector
+    def get_sector(self, ticker: str) -> str:
+        return self.sector_mappings.get(ticker, 'Unknown')
 
-    def predict(self, ticker: str, sector: str = None) -> Dict[str, Any]:
-        # Generate predictions for any ticker with fallback for unknown tickers
-        collected_data = self.data_collector.collect_all_data(
-            tickers=[ticker],
-            start_date=(datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
-        )
-        processed_features = self.data_processor.prepare_features(collected_data)
-        
-        if ticker not in processed_features:
-            raise ValueError(f"Unable to fetch data for ticker {ticker}")
-        
-        features_df = processed_features[ticker]
-        feature_names = [col for col in features_df.columns 
-                        if col not in ['Date', 'Type', 'Sector', 'Open', 'High', 'Low', 'Close', 'Volume']]
-        X = features_df[feature_names].iloc[-1:].values
-        X_scaled = self.scaler.transform(X)
-        
-        short_term_prob = self.short_term_model.predict_proba(X_scaled)[0]
-        long_term_prob = self.long_term_model.predict_proba(X_scaled)[0]
-        signals = self.data_processor.generate_signals({ticker: features_df})
-        
-        return {
-            'ticker': ticker,
-            'sector': sector or 'Unknown',
-            'short_term': {
-                'prediction': 'bullish' if short_term_prob[1] > 0.5 else 'bearish',
-                'confidence': float(max(short_term_prob))
-            },
-            'long_term': {
-                'prediction': 'bullish' if long_term_prob[1] > 0.5 else 'bearish',
-                'confidence': float(max(long_term_prob))
-            },
-            'technical_indicators': {
-                'RSI': float(features_df['RSI'].iloc[-1]) if 'RSI' in features_df else None,
-                'MACD': float(features_df['MACD'].iloc[-1]) if 'MACD' in features_df else None,
-                'VIX': float(features_df['VIX'].iloc[-1]) if 'VIX' in features_df else None
-            },
-            'signals': signals[ticker],
-            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        }
+    # Predicting sector trends (placeholder)
+    def predict_sector(self, sector: str) -> Dict:
+        print(f"Predicting sector {sector}: Not implemented")
+        return {'sector': sector, 'prediction': 'Not implemented'}
 
-    def generate_portfolio_recommendation(self, risk_tolerance: str = 'moderate') -> Dict[str, Any]:
-        # Generate sector-based portfolio recommendations based on risk tolerance
-        sector_scores = {}
-        for sector, etf in self.sector_etfs.items():
-            prediction = self.predict(etf, sector)
-            short_term_score = prediction['short_term']['confidence'] if prediction['short_term']['prediction'] == 'bullish' else -prediction['short_term']['confidence']
-            long_term_score = prediction['long_term']['confidence'] if prediction['long_term']['prediction'] == 'bullish' else -prediction['long_term']['confidence']
-            technical_score = sum([1 if signal == 'buy' else -1 if signal == 'sell' else 0 
-                                 for signal in prediction['signals'].values()])
-            sector_scores[sector] = 0.5 * short_term_score + 0.3 * long_term_score + 0.2 * technical_score
-        
-        sorted_sectors = sorted(sector_scores.items(), key=lambda x: x[1], reverse=True)
-        top_sectors = [s[0] for s in sorted_sectors[:3]]
-        neutral_sectors = [s[0] for s in sorted_sectors[3:6]]
-        avoid_sectors = [s[0] for s in sorted_sectors[6:]]
-        
-        weights = {'conservative': 0.2, 'moderate': 0.5, 'aggressive': 0.8}
-        weight = weights.get(risk_tolerance, 0.5)
-        
-        return {
-            'risk_tolerance': risk_tolerance,
-            'portfolio_weight': weight,
-            'top_sectors': top_sectors,
-            'neutral_sectors': neutral_sectors,
-            'avoid_sectors': avoid_sectors
-        }
+    # Generating portfolio recommendations (placeholder)
+    def generate_portfolio_recommendation(self, tickers: List[str], risk_tolerance: str) -> Dict:
+        print(f"Generating portfolio for {tickers} with risk {risk_tolerance}: Not implemented")
+        return {'portfolio': tickers, 'recommendation': 'Not implemented'}
 
-    def save_models(self, directory: str = 'models'):
-        # Save trained models and scaler to disk
-        os.makedirs(directory, exist_ok=True)
-        joblib.dump(self.short_term_model, os.path.join(directory, 'short_term_model.pkl'))
-        joblib.dump(self.long_term_model, os.path.join(directory, 'long_term_model.pkl'))
-        joblib.dump(self.scaler, os.path.join(directory, 'scaler.pkl'))
+    # Making predictions for a ticker
+    def predict(self, ticker: str) -> Dict:
+        if not self.short_term_model or not self.long_term_model or not self.scaler:
+            self.load_models()
 
-def load_models(predictor: 'AdvancedStockPredictor', directory: str = 'models'):
-    # Load trained models and scaler from disk
-    predictor.short_term_model = joblib.load(os.path.join(directory, 'short_term_model.pkl'))
-    predictor.long_term_model = joblib.load(os.path.join(directory, 'long_term_model.pkl'))
-    predictor.scaler = joblib.load(os.path.join(directory, 'scaler.pkl'))
+        try:
+            df = yf.Ticker(ticker).history(period='1y')
+            if df.empty:
+                return {'ticker': ticker, 'error': 'No data available'}
+
+            df = self._compute_indicators(df)
+            latest_data = {
+                'Close': df['Close'].iloc[-1],
+                'RSI': df['RSI'].iloc[-1],
+                'MACD': df['MACD'].iloc[-1],
+                'BB_upper': df['BB_upper'].iloc[-1],
+                'BB_lower': df['BB_lower'].iloc[-1],
+                'ATR': df['ATR'].iloc[-1],
+                'VIX': 20.0,  # Placeholder
+                'Sector_Sentiment': 0.5,  # Placeholder
+                'GDP': 0.02, 'Real_GDP': 0.015, 'Inflation': 0.03, 'Core_Inflation': 0.025,
+                'Unemployment': 0.04, 'Initial_Claims': 200000, 'Nonfarm_Payrolls': 150000,
+                'Fed_Funds_Rate': 0.05, '10Y_Treasury': 0.042, '2Y_Treasury': 0.04,
+                'Industrial_Production': 0.01, 'Consumer_Sentiment': 70.0, 'Retail_Sales': 0.005,
+                'Housing_Starts': 1400000, 'PCE': 0.02, 'Capacity_Utilization': 0.75,
+                'Labor_Force_Participation': 0.62, 'Yield_Curve_Spread': 0.002,
+                'GDP_Growth': 0.02, 'Employment_Change': 0.01
+            }
+
+            features = pd.DataFrame([latest_data])
+            features_scaled = self.scaler.transform(features.values)  # Convert to NumPy array
+            
+            short_pred = self.short_term_model.predict(features_scaled)[0]
+            short_proba = self.short_term_model.predict_proba(features_scaled)[0]
+            long_pred = self.long_term_model.predict(features_scaled)[0]
+            long_proba = self.long_term_model.predict_proba(features_scaled)[0]
+            
+            signal_map = {1: 'Buy', 0: 'Sell', 2: 'Hold'}
+            return {
+                'ticker': ticker,
+                'short_term_prediction': signal_map[short_pred],
+                'short_term_probabilities': dict(zip(['Sell', 'Buy', 'Hold'], short_proba)),
+                'long_term_prediction': signal_map[long_pred],
+                'long_term_probabilities': dict(zip(['Sell', 'Buy', 'Hold'], long_proba)),
+                'explanation': f"Based on technical indicators and market data, {ticker} is predicted to {signal_map[short_pred]} in the short term (63 days) and {signal_map[long_pred]} in the long term (252 days)."
+            }
+        except Exception as e:
+            return {'ticker': ticker, 'error': f'Prediction failed: {e}'}
+
+    # Predicting and outputting results for one or multiple tickers
+    def predict_and_output(self, tickers: List[str] = None):
+        if tickers is None:
+            tickers = self.get_all_tickers()
+        
+        results = []
+        for ticker in tickers:
+            pred = self.predict(ticker)
+            results.append(pred)
+            
+            print(f"\nPrediction for {ticker}:")
+            if 'error' in pred:
+                print(f"Error: {pred['error']}")
+            else:
+                print(f"Short-Term Prediction (63 days): {pred['short_term_prediction']}")
+                print(f"Probabilities: Sell={pred['short_term_probabilities']['Sell']:.4f}, Buy={pred['short_term_probabilities']['Buy']:.4f}, Hold={pred['short_term_probabilities']['Hold']:.4f}")
+                print(f"Long-Term Prediction (252 days): {pred['long_term_prediction']}")
+                print(f"Probabilities: Sell={pred['long_term_probabilities']['Sell']:.4f}, Buy={pred['long_term_probabilities']['Buy']:.4f}, Hold={pred['long_term_probabilities']['Hold']:.4f}")
+                print(f"Explanation: {pred['explanation']}")
+        
+        return results
+
+if __name__ == "__main__":
+    # Executing predictions and outputting results for sample tickers
+    predictor = AdvancedStockPredictor()
+    predictor.predict_and_output(['AAPL', 'LIN'])
