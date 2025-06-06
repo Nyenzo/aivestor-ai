@@ -1,106 +1,71 @@
+# Flask API for serving stock predictions, portfolio recommendations, and chatbot responses
 from flask import Flask, request, jsonify
-from dotenv import load_dotenv
 from advanced_stock_predictor import AdvancedStockPredictor
-import os
+from chatbot import AivestorChatbot
+from typing import Dict, List
 
-# Load environment variables
-load_dotenv()
-
-# Initialize Flask app
 app = Flask(__name__)
-
-# Initialize AI model
 predictor = AdvancedStockPredictor()
+chatbot = AivestorChatbot()
 
-@app.route('/')
-def hello():
-    """Health check endpoint"""
-    return jsonify({
-        'status': 'healthy',
-        'service': 'Aivestor AI API',
-        'version': '1.0'
-    })
+# Endpoint for predicting a single ticker
+@app.route('/predict/<ticker>', methods=['GET'])
+def predict_ticker(ticker: str) -> Dict:
+    try:
+        result = predictor.predict(ticker)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'ticker': ticker, 'error': f'Prediction failed: {e}'}), 500
 
-@app.route('/api/predict', methods=['POST'])
-def predict():
-    """Generate stock predictions and recommendations"""
+# Endpoint for predicting multiple tickers
+@app.route('/predict', methods=['POST'])
+def predict_tickers() -> Dict:
     try:
         data = request.get_json()
-        sector = data.get('sector')
-        ticker = data.get('ticker')
-        sentiment_score = data.get('sentiment_score', 0.0)
-
-        # Get predictions
-        prediction = predictor.predict_sector(
-            sector=sector,
-            ticker=ticker,
-            sentiment_score=sentiment_score
-        )
-
-        return jsonify({
-            'status': 'success',
-            'data': prediction
-        })
+        tickers = data.get('tickers', [])
+        if not tickers:
+            return jsonify({'error': 'No tickers provided'}), 400
+        results = predictor.predict_and_output(tickers)
+        return jsonify(results)
     except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'message': str(e)
-        }), 500
+        return jsonify({'error': f'Prediction failed: {e}'}), 500
 
-@app.route('/api/portfolio/recommend', methods=['POST'])
-def recommend_portfolio():
-    """Generate portfolio recommendations"""
+# Endpoint for predicting a sector
+@app.route('/predict_sector/<sector>', methods=['GET'])
+def predict_sector(sector: str) -> Dict:
+    try:
+        result = predictor.predict_sector(sector)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'sector': sector, 'error': f'Prediction failed: {e}'}), 500
+
+# Endpoint for generating portfolio recommendations
+@app.route('/portfolio', methods=['POST'])
+def generate_portfolio() -> Dict:
     try:
         data = request.get_json()
-        predictions = data.get('predictions', {})
-        risk_tolerance = data.get('risk_tolerance', 'moderate')
-
-        # Generate recommendations
-        recommendations = predictor.generate_portfolio_recommendation(
-            predictions=predictions,
-            risk_tolerance=risk_tolerance
-        )
-
-        return jsonify({
-            'status': 'success',
-            'data': recommendations
-        })
+        tickers = data.get('tickers', [])
+        risk_tolerance = data.get('risk_tolerance', 'medium')
+        if not tickers:
+            return jsonify({'error': 'No tickers provided'}), 400
+        result = predictor.generate_portfolio_recommendation(tickers, risk_tolerance)
+        return jsonify(result)
     except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'message': str(e)
-        }), 500
+        return jsonify({'error': f'Recommendation failed: {e}'}), 500
 
-@app.route('/api/model/train', methods=['POST'])
-def train_model():
-    """Train or update the AI model"""
+# Endpoint for chatbot FAQ responses
+@app.route('/chat', methods=['POST'])
+def chat() -> Dict:
     try:
         data = request.get_json()
-        sector_data = data.get('sector_data', {})
-        sentiment_results = data.get('sentiment_results', {})
-
-        # Train models
-        predictor.train_models(
-            sector_data=sector_data,
-            sentiment_results=sentiment_results
-        )
-
-        return jsonify({
-            'status': 'success',
-            'message': 'Model training completed successfully'
-        })
+        query = data.get('query', '')
+        if not query:
+            return jsonify({'error': 'No query provided'}), 400
+        response = chatbot.get_response(query)
+        return jsonify(response)
     except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'message': str(e)
-        }), 500
+        return jsonify({'error': f'Chat failed: {e}'}), 500
 
-if __name__ == '__main__':
-    # Ensure all environment variables are loaded
-    required_vars = ['ALPHA_VANTAGE_API_KEY', 'FRED_API_KEY', 'NEWS_API_KEY']
-    missing_vars = [var for var in required_vars if not os.getenv(var)]
-    
-    if missing_vars:
-        raise EnvironmentError(f"Missing required environment variables: {', '.join(missing_vars)}")
-    
-    app.run(host='0.0.0.0', port=5001, debug=True)
+if __name__ == "__main__":
+    # Running the Flask API
+    app.run(debug=True, host='0.0.0.0', port=5000)
