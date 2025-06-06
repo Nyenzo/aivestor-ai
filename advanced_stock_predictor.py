@@ -1,4 +1,4 @@
-# Managing stock predictions and outputting results
+# Managing stock predictions and portfolio recommendations
 import pandas as pd
 import numpy as np
 import pickle
@@ -99,15 +99,100 @@ class AdvancedStockPredictor:
     def get_sector(self, ticker: str) -> str:
         return self.sector_mappings.get(ticker, 'Unknown')
 
-    # Predicting sector trends (placeholder)
+    # Predicting sector trends based on ETF and constituent tickers
     def predict_sector(self, sector: str) -> Dict:
-        print(f"Predicting sector {sector}: Not implemented")
-        return {'sector': sector, 'prediction': 'Not implemented'}
+        try:
+            if sector not in self.SECTOR_ETFS:
+                return {'sector': sector, 'error': 'Invalid sector'}
 
-    # Generating portfolio recommendations (placeholder)
+            etf_ticker = self.SECTOR_ETFS[sector]
+            sector_tickers = [t for t, s in self.sector_mappings.items() if s == sector and t in self.TICKERS]
+            sector_tickers.append(etf_ticker)
+
+            short_probs = {'Sell': 0.0, 'Buy': 0.0, 'Hold': 0.0}
+            long_probs = {'Sell': 0.0, 'Buy': 0.0, 'Hold': 0.0}
+            count = 0
+
+            for ticker in sector_tickers:
+                pred = self.predict(ticker)
+                if 'error' not in pred:
+                    for key in short_probs:
+                        short_probs[key] += pred['short_term_probabilities'][key]
+                        long_probs[key] += pred['long_term_probabilities'][key]
+                    count += 1
+
+            if count == 0:
+                return {'sector': sector, 'error': 'No valid predictions for sector tickers'}
+
+            for key in short_probs:
+                short_probs[key] /= count
+                long_probs[key] /= count
+
+            short_pred = max(short_probs, key=short_probs.get)
+            long_pred = max(long_probs, key=long_probs.get)
+
+            return {
+                'sector': sector,
+                'short_term_prediction': short_pred,
+                'short_term_probabilities': short_probs,
+                'long_term_prediction': long_pred,
+                'long_term_probabilities': long_probs,
+                'explanation': f"Based on averaged predictions for {sector} tickers, the sector is predicted to {short_pred} in the short term (63 days) and {long_pred} in the long term (252 days)."
+            }
+        except Exception as e:
+            return {'sector': sector, 'error': f'Prediction failed: {e}'}
+
+    # Generating portfolio recommendations based on risk tolerance
     def generate_portfolio_recommendation(self, tickers: List[str], risk_tolerance: str) -> Dict:
-        print(f"Generating portfolio for {tickers} with risk {risk_tolerance}: Not implemented")
-        return {'portfolio': tickers, 'recommendation': 'Not implemented'}
+        try:
+            valid_tickers = [t for t in tickers if t in self.get_all_tickers()]
+            if not valid_tickers:
+                return {'portfolio': tickers, 'error': 'No valid tickers provided'}
+
+            risk_weights = {
+                'low': {'Buy': 0.6, 'Hold': 0.3, 'Sell': 0.1},
+                'medium': {'Buy': 0.4, 'Hold': 0.4, 'Sell': 0.2},
+                'high': {'Buy': 0.7, 'Hold': 0.2, 'Sell': 0.1}
+            }
+            if risk_tolerance.lower() not in risk_weights:
+                return {'portfolio': tickers, 'error': 'Invalid risk tolerance'}
+
+            weights = risk_weights[risk_tolerance.lower()]
+            allocations = {t: 0.0 for t in valid_tickers}
+            short_scores = []
+            long_scores = []
+
+            for ticker in valid_tickers:
+                pred = self.predict(ticker)
+                if 'error' not in pred:
+                    short_score = (pred['short_term_probabilities']['Buy'] * weights['Buy'] +
+                                   pred['short_term_probabilities']['Hold'] * weights['Hold'] +
+                                   pred['short_term_probabilities']['Sell'] * weights['Sell'])
+                    long_score = (pred['long_term_probabilities']['Buy'] * weights['Buy'] +
+                                  pred['long_term_probabilities']['Hold'] * weights['Hold'] +
+                                  pred['long_term_probabilities']['Sell'] * weights['Sell'])
+                    short_scores.append(short_score)
+                    long_scores.append(long_score)
+                else:
+                    short_scores.append(0.0)
+                    long_scores.append(0.0)
+
+            total_score = sum((s + l) for s, l in zip(short_scores, long_scores) if s > 0 or l > 0)
+            if total_score == 0:
+                return {'portfolio': tickers, 'error': 'No valid predictions for portfolio'}
+
+            for i, ticker in enumerate(valid_tickers):
+                if short_scores[i] > 0 or long_scores[i] > 0:
+                    allocations[ticker] = (short_scores[i] + long_scores[i]) / total_score
+
+            return {
+                'portfolio': valid_tickers,
+                'allocations': allocations,
+                'risk_tolerance': risk_tolerance,
+                'explanation': f"Portfolio allocations for {len(valid_tickers)} tickers based on {risk_tolerance} risk tolerance, favoring Buy signals for higher risk."
+            }
+        except Exception as e:
+            return {'portfolio': tickers, 'error': f'Recommendation failed: {e}'}
 
     # Making predictions for a ticker
     def predict(self, ticker: str) -> Dict:
@@ -139,7 +224,7 @@ class AdvancedStockPredictor:
             }
 
             features = pd.DataFrame([latest_data])
-            features_scaled = self.scaler.transform(features.values)  # Convert to NumPy array
+            features_scaled = self.scaler.transform(features.values)
             
             short_pred = self.short_term_model.predict(features_scaled)[0]
             short_proba = self.short_term_model.predict_proba(features_scaled)[0]
