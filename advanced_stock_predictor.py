@@ -369,6 +369,32 @@ class AdvancedStockPredictor:
         
         return results
 
+    def get_top_gainers_losers(self, top_n=3):
+        """
+        Returns the top N gainers and losers among tracked tickers based on daily percent change.
+        """
+        import yfinance as yf
+        results = []
+        for ticker in self.TICKERS:
+            try:
+                df = yf.Ticker(ticker).history(period='2d')
+                if df.empty or len(df) < 2:
+                    continue
+                current = df['Close'].iloc[-1]
+                prev = df['Close'].iloc[-2]
+                change = ((current - prev) / prev) * 100 if prev != 0 else 0
+                results.append({
+                    'ticker': ticker,
+                    'current_price': current,
+                    'previous_close': prev,
+                    'change_percent': change
+                })
+            except Exception as e:
+                continue
+        gainers = sorted(results, key=lambda x: x['change_percent'], reverse=True)[:top_n]
+        losers = sorted(results, key=lambda x: x['change_percent'])[:top_n]
+        return {'gainers': gainers, 'losers': losers}
+
 # Running predictions for sample tickers if script is executed directly
 if __name__ == "__main__":
     predictor = AdvancedStockPredictor()
