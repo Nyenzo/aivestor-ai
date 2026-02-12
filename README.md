@@ -1,131 +1,73 @@
-# Aivestor AI 🤖📈
+# Aivestor AI Service
 
-An advanced AI-powered investment advisory system that combines machine learning, sentiment analysis, and economic indicators to provide intelligent stock market predictions and portfolio recommendations.
+Flask-based machine learning service for stock predictions, portfolio analysis, and AI-powered chatbot.
 
-## 🌟 Features
+## Setup
 
-- **Advanced Stock Prediction**: Utilizes machine learning models to forecast stock movements
-- **Sentiment Analysis**: Incorporates market sentiment from news and social media
-- **Economic Indicator Analysis**: Integrates FRED economic data for comprehensive market analysis
-- **Portfolio Optimization**: Provides personalized portfolio recommendations based on risk tolerance
-- **Real-time Data Processing**: Continuous updates from multiple financial data sources
-- **RESTful API**: Easy integration with frontend applications
-
-## 🛠️ Technology Stack
-
-- **AI/ML**: Python, scikit-learn, PyTorch, Transformers
-- **Data Processing**: NumPy, Pandas, yfinance
-- **API Integration**: Alpha Vantage, FRED, News API
-- **Backend**: Flask REST API
-- **Visualization**: Matplotlib, Seaborn
-- **Text Processing**: TextBlob, PyPDF2
-
-## 📋 Prerequisites
-
-- Python 3.8+
-- PostgreSQL
-- API Keys:
-  - Alpha Vantage
-  - FRED
-  - News API
-
-## 🚀 Getting Started
-
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/yourusername/aivestor-ai.git
-   cd aivestor-ai
-   ```
-
-2. **Set up virtual environment**
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-
-3. **Install dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. **Configure environment variables**
-   Create a `.env` file in the root directory:
-   ```
-   ALPHA_VANTAGE_API_KEY=your_key_here
-   FRED_API_KEY=your_key_here
-   NEWS_API_KEY=your_key_here
-   ```
-
-5. **Initialize database**
-   ```bash
-   psql -U your_username -d your_database -f setup_tables.sql
-   ```
-
-6. **Start the Flask server**
-   ```bash
-   python app.py
-   ```
-
-## 🔄 API Endpoints
-
-### Health Check
-```
-GET /
+```bash
+python -m venv venv
+source venv/bin/activate          # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+cp .env.example .env              # fill in your keys
+python app.py                     # runs on port 5001
 ```
 
-### Predict Stock Movement
-```
-POST /api/predict
-{
-    "sector": "technology",
-    "ticker": "AAPL",
-    "sentiment_score": 0.75
-}
-```
+## API Endpoints
 
-### Portfolio Recommendations
-```
-POST /api/portfolio/recommend
-{
-    "predictions": {...},
-    "risk_tolerance": "moderate"
-}
-```
+| Method | Route | Description |
+|--------|-------|-------------|
+| GET | `/health` | Health check |
+| POST | `/predict` | Single stock prediction |
+| POST | `/predict/portfolio` | Portfolio-wide predictions |
+| POST | `/chat` | AI chatbot (Gemini-powered) |
+| POST | `/analyze` | Market analysis |
 
-### Train Model
-```
-POST /api/model/train
-{
-    "sector_data": {...},
-    "sentiment_results": {...}
-}
+## Data Collection
+
+Stock and market data is collected via `enhanced_data_collection.py`:
+
+```bash
+python enhanced_data_collection.py
 ```
 
-## 📊 Data Collection and Processing
+This pulls data from Yahoo Finance, FRED, and news APIs. Output goes to `datacollection/` (gitignored — large files).
 
-The system collects and processes data through multiple components:
-- `enhanced_data_collection.py`: Gathers financial and market data
-- `process_enhanced_data.py`: Preprocesses and transforms raw data
-- `train_enhanced_model_cv.py`: Trains models with cross-validation
-- `advanced_stock_predictor.py`: Core prediction engine
+## Model Training
 
-## 📈 Visualization Examples
+```bash
+python train_enhanced_model_cv.py
+```
 
-The system generates various analytical visualizations:
-- Correlation matrices
-- Sentiment analysis trends
-- Economic indicators
-- Volatility comparisons
-- Sector performance
+Trains a cross-validated model using collected data. Saved models go to `models/`.
 
-## 🤝 Contributing
+## Testing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+```bash
+pytest
+```
 
-## 📝 License
+## Project Structure
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+```
+├── app.py                        # Flask API server
+├── chatbot.py                    # Gemini chatbot logic
+├── advanced_stock_predictor.py   # ML prediction engine
+├── enhanced_data_collection.py   # Data pipeline
+├── analyze_market_data.py        # Market analysis utilities
+├── process_enhanced_data.py      # Data preprocessing
+├── train_enhanced_model_cv.py    # Model training w/ cross-validation
+├── models/                       # Trained model artifacts
+├── tests/                        # pytest test suites
+├── requirements.txt
+└── .env.example
+```
 
-## 📧 Contact
+## Environment Variables
 
-For questions and support, please open an issue in the GitHub repository.
+| Variable | Description |
+|----------|-------------|
+| `GOOGLE_API_KEY` | Google Gemini API key |
+| `FRED_API_KEY` | FRED economic data API key |
+| `ALPHA_VANTAGE_KEY` | Alpha Vantage API key (optional) |
+| `NEWS_API_KEY` | News API key (optional) |
+| `PORT` | Server port (default 5001) |

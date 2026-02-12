@@ -13,9 +13,16 @@ seaborn
 requests
 tqdm
 textblob
-textblob
 PyPDF2
 pdf2image
 pytesseract
 flask
 pyjwt
+pytest
+pytest-cov
+pytest-mock
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-instrumentation-flask
+opentelemetry-exporter-otlp
+opentelemetry-instrumentation-requests

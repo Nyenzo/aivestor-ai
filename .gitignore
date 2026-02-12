@@ -1,2 +1,44 @@
+# Virtual environment
 venv/
+.venv/
+
+# Environment
 .env
+.env.local
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# Test cache
+.pytest_cache/
+
+# Data files (large, should live in cloud storage)
+datacollection/
+*.pkl
+
+# Generated charts
+*.png
+
+# Trained models (large binaries)
+models/*.joblib
+models/*.h5
+models/*.pt
+
+# Logs
+*.log
+
+# PDFs
+*.pdf
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp

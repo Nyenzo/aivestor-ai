@@ -335,9 +335,16 @@ class AdvancedStockPredictor:
             long_pred = self.long_term_model.predict(features_scaled)[0]
             long_proba = self.long_term_model.predict_proba(features_scaled)[0]
             
+            # Calculate price change percentage
+            current_price = df['Close'].iloc[-1]
+            prev_price = df['Close'].iloc[-2] if len(df) > 1 else current_price
+            price_change_percent = ((current_price - prev_price) / prev_price) * 100 if prev_price != 0 else 0
+            
             signal_map = {1: 'Buy', 0: 'Sell', 2: 'Hold'}
             return {
                 'ticker': ticker,
+                'current_price': float(current_price),
+                'price_change_percent': float(price_change_percent),
                 'short_term_prediction': signal_map[short_pred],
                 'short_term_probabilities': dict(zip(['Sell', 'Buy', 'Hold'], short_proba)),
                 'long_term_prediction': signal_map[long_pred],
