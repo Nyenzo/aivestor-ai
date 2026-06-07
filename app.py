@@ -1,6 +1,6 @@
 # Importing required libraries for the Flask API and JWT authentication
 from flask import Flask, request, jsonify
-from advanced_stock_predictor import AdvancedStockPredictor
+from stock_predictor import AdvancedStockPredictor
 from chatbot import AivestorChatbot
 from typing import Dict, List
 import jwt
@@ -9,6 +9,7 @@ import os
 from dotenv import load_dotenv
 import logging
 import traceback
+import yfinance as yf
 
 # Setting up logging to track API requests and errors
 logging.basicConfig(filename='aivestor.log', level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -18,8 +19,26 @@ app = Flask(__name__)
 load_dotenv()
 predictor = AdvancedStockPredictor()
 chatbot = AivestorChatbot()
-SECRET_KEY = os.getenv('JWT_SECRET_KEY') or 'your-very-secure-secret-key'
+SECRET_KEY = os.getenv('JWT_SECRET_KEY') or os.getenv('JWT_SECRET') or 'your-very-secure-secret-key'
 logging.info("Flask AI service initialized")
+
+@app.after_request
+def apply_cache_headers(response):
+    if request.path.startswith('/predict') or request.path == '/portfolio':
+        if response.status_code == 200:
+            response.headers['Cache-Control'] = 'private, max-age=60, stale-while-revalidate=120'
+            response.headers['X-Model-Service'] = 'aivestor-ai'
+    elif request.path == '/health':
+        response.headers['Cache-Control'] = 'no-store'
+    return response
+
+@app.route('/health', methods=['GET'])
+def health() -> Dict:
+    return jsonify({
+        'ok': True,
+        'service': 'aivestor-ai',
+        'model_version': 'enhanced-gradient-boosting-v2'
+    })
 
 # Middleware to verify JWT tokens
 def require_auth(f):
@@ -37,6 +56,33 @@ def require_auth(f):
             return jsonify({'error': f'Invalid token: {str(e)}'}), 401
         return f(*args, **kwargs)
     return decorated
+
+@app.route('/history/<ticker>', methods=['GET'])
+@require_auth
+def get_history(ticker: str) -> Dict:
+    period = request.args.get('period', '1y')
+    allowed_periods = {'5d', '1mo', '3mo', '6mo', '1y', '2y', '5y', '10y', 'ytd', 'max'}
+    if period not in allowed_periods:
+        period = '1y'
+
+    try:
+        history = yf.Ticker(ticker).history(period=period)
+        rows = []
+        if history is not None and not history.empty:
+            for index, row in history.reset_index().iterrows():
+                date_value = row.get('Date') or row.get('Datetime') or index
+                rows.append({
+                    'date': str(date_value)[:10],
+                    'price': float(row.get('Close', 0) or 0),
+                    'open': float(row.get('Open', 0) or 0),
+                    'high': float(row.get('High', 0) or 0),
+                    'low': float(row.get('Low', 0) or 0),
+                    'volume': float(row.get('Volume', 0) or 0),
+                })
+        return jsonify({'ticker': ticker.upper(), 'period': period, 'data': rows})
+    except Exception as e:
+        logging.warning(f"History fetch failed for {ticker}: {e}")
+        return jsonify({'ticker': ticker.upper(), 'period': period, 'data': [], 'error': str(e)})
 
 # Endpoint for predicting a single ticker
 @app.route('/predict/<ticker>', methods=['GET'])

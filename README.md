@@ -24,10 +24,10 @@ python app.py                     # runs on port 5001
 
 ## Data Collection
 
-Stock and market data is collected via `enhanced_data_collection.py`:
+Stock and market data is collected via `data_collection.py`:
 
 ```bash
-python enhanced_data_collection.py
+python data_collection.py
 ```
 
 This pulls data from Yahoo Finance, FRED, and news APIs. Output goes to `datacollection/` (gitignored — large files).
@@ -35,7 +35,7 @@ This pulls data from Yahoo Finance, FRED, and news APIs. Output goes to `datacol
 ## Model Training
 
 ```bash
-python train_enhanced_model_cv.py
+python train_model_cv.py
 ```
 
 Trains a cross-validated model using collected data. Saved models go to `models/`.
@@ -51,11 +51,11 @@ pytest
 ```
 ├── app.py                        # Flask API server
 ├── chatbot.py                    # Gemini chatbot logic
-├── advanced_stock_predictor.py   # ML prediction engine
-├── enhanced_data_collection.py   # Data pipeline
+├── stock_predictor.py            # ML prediction engine
+├── data_collection.py            # Data pipeline
 ├── analyze_market_data.py        # Market analysis utilities
-├── process_enhanced_data.py      # Data preprocessing
-├── train_enhanced_model_cv.py    # Model training w/ cross-validation
+├── process_data.py               # Data preprocessing
+├── train_model_cv.py             # Model training w/ cross-validation
 ├── models/                       # Trained model artifacts
 ├── tests/                        # pytest test suites
 ├── requirements.txt

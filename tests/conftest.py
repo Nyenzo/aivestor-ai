@@ -44,7 +44,12 @@ class MockResponse:
 
 requests.get = lambda *args, **kwargs: MockResponse()
 
-from google import genai
+try:
+    from google import genai
+except ImportError:
+    class _GenAI:
+        pass
+    genai = _GenAI()
 
 class MockModels:
     def generate_content(self, *args, **kwargs):
@@ -82,7 +87,7 @@ except ImportError:
     pass
 
 # Mock AdvancedStockPredictor to bypass pickle load errors
-from advanced_stock_predictor import AdvancedStockPredictor
+from stock_predictor import AdvancedStockPredictor
 # Helper to inject intentional 500 errors for coverage
 def _mock_predict(self, ticker):
     if ticker == 'ERROR_TICKER':

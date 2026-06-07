@@ -7,6 +7,14 @@ from typing import Dict, List
 class AivestorChatbot:
     # Initializing chatbot with FAQ data
     def __init__(self):
+        class _OfflineModels:
+            def generate_content(self, *args, **kwargs):
+                raise RuntimeError("External generative model is not configured")
+
+        class _OfflineClient:
+            models = _OfflineModels()
+
+        self.client = _OfflineClient()
         self.faqs = [
             {
                 'question': 'What is Aivestor?',
@@ -22,7 +30,7 @@ class AivestorChatbot:
             },
             {
                 'question': 'How do I get predictions for a stock?',
-                'answer': 'Use the Flask API endpoint `/predict/<ticker>` (e.g., `/predict/AAPL`) or run `advanced_stock_predictor.py` with a ticker list.'
+                'answer': 'Use the Flask API endpoint `/predict/<ticker>` (e.g., `/predict/AAPL`) or run `stock_predictor.py` with a ticker list.'
             },
             {
                 'question': 'Can Aivestor predict sector trends?',

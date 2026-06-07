@@ -10,13 +10,27 @@ from sklearn.preprocessing import StandardScaler
 from dotenv import load_dotenv
 import logging
 from datetime import datetime, timedelta
+import time
 
 # Setting up logging to track API failures
 logging.basicConfig(filename='aivestor.log', level=logging.WARNING, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Defining the AdvancedStockPredictor class for stock predictions
 class AdvancedStockPredictor:
-    MODEL_DIR = 'models'
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    MODEL_DIR = os.path.join(BASE_DIR, 'models')
+    CACHE_TTL_SECONDS = int(os.getenv('PREDICTION_CACHE_TTL_SECONDS', '300'))
+    MARKET_CACHE_TTL_SECONDS = int(os.getenv('MARKET_CACHE_TTL_SECONDS', '120'))
+    ECONOMIC_CACHE_TTL_SECONDS = int(os.getenv('ECONOMIC_CACHE_TTL_SECONDS', '3600'))
+    NEWS_CACHE_TTL_SECONDS = int(os.getenv('NEWS_CACHE_TTL_SECONDS', '1800'))
+    BASE_FEATURES = ['Close', 'RSI', 'MACD', 'BB_upper', 'BB_lower', 'ATR', 'VIX', 'Sector_Sentiment']
+    ECONOMIC_FEATURES = [
+        'GDP', 'Real_GDP', 'Inflation', 'Core_Inflation', 'Unemployment', 'Initial_Claims',
+        'Nonfarm_Payrolls', 'Fed_Funds_Rate', '10Y_Treasury', '2Y_Treasury', 'Industrial_Production',
+        'Consumer_Sentiment', 'Retail_Sales', 'Housing_Starts', 'PCE', 'Capacity_Utilization',
+        'Labor_Force_Participation', 'Yield_Curve_Spread', 'GDP_Growth', 'Employment_Change'
+    ]
+    FUNDAMENTAL_FEATURES = ['PE_Ratio', 'EPS', 'Revenue_TTM', 'Debt_to_Equity']
     TICKERS = [
         'AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'TSLA', 'NVDA', 'AMD', 'INTC', 'TSM', 'QCOM',
         'PFE', 'ABBV', 'LLY', 'MRK', 'JNJ', 'T', 'VZ', 'TMUS', 'CMCSA', 'CHTR', 'XOM', 'CVX',
@@ -58,14 +72,38 @@ class AdvancedStockPredictor:
         load_dotenv()
         self.FRED_API_KEY = os.getenv('FRED_API_KEY')
         self.NEWSAPI_KEY = os.getenv('NEWSAPI_KEY')
-        if not self.FRED_API_KEY or not self.NEWSAPI_KEY:
-            raise ValueError("FRED_API_KEY or NEWSAPI_KEY not found in .env file")
         self.short_term_model = None
         self.long_term_model = None
         self.scaler = None
         self.sector_mappings = self._create_sector_mappings()
         self.historical_vix = 20.0  # Historical average
         self.historical_economic = None  # Set after first fetch
+        self._cache = {}
+        if not self.FRED_API_KEY:
+            logging.warning("FRED_API_KEY not configured; economic features will use neutral cached defaults.")
+        if not self.NEWSAPI_KEY:
+            logging.warning("NEWSAPI_KEY not configured; sector sentiment will use neutral defaults.")
+
+    def _ttl_get(self, key):
+        entry = self._cache.get(key)
+        if not entry:
+            return None
+        expires_at, value = entry
+        if expires_at < time.time():
+            self._cache.pop(key, None)
+            return None
+        return value
+
+    def _ttl_set(self, key, value, ttl):
+        self._cache[key] = (time.time() + ttl, value)
+        return value
+
+    def _feature_names(self, ticker: str) -> List[str]:
+        is_etf = ticker in list(self.SECTOR_ETFS.values()) + ['GLD', 'USO', 'XAUUSD']
+        names = self.BASE_FEATURES + self.ECONOMIC_FEATURES
+        if not is_etf:
+            names += self.FUNDAMENTAL_FEATURES
+        return names
 
     # Mapping tickers to their respective sectors
     def _create_sector_mappings(self) -> Dict[str, str]:
@@ -94,6 +132,8 @@ class AdvancedStockPredictor:
 
     # Loading trained machine learning models and scaler
     def load_models(self):
+        if self.short_term_model and self.long_term_model and self.scaler:
+            return
         try:
             with open(os.path.join(self.MODEL_DIR, 'short_term_model.pkl'), 'rb') as f:
                 self.short_term_model = pickle.load(f)
@@ -103,29 +143,37 @@ class AdvancedStockPredictor:
                 self.scaler = pickle.load(f)
             print("Loaded models and scaler")
         except FileNotFoundError:
-            print("Error: Trained models not found. Please run train_enhanced_model_cv.py first.")
+            print("Error: Trained models not found. Please run train_model_cv.py first.")
             raise
 
     # Fetching economic indicators from FRED API with fallback handling
     def _fetch_economic_data(self) -> Dict[str, float]:
+        cached = self._ttl_get('economic_data')
+        if cached is not None:
+            return cached
+
+        fred_series = {
+            'GDP': 'GDP', 'Real_GDP': 'GDPC1', 'Inflation': 'CPIAUCSL',
+            'Core_Inflation': 'CPILFESL', 'Unemployment': 'UNRATE',
+            'Initial_Claims': 'ICSA', 'Nonfarm_Payrolls': 'PAYEMS',
+            'Fed_Funds_Rate': 'FEDFUNDS', '10Y_Treasury': 'DGS10',
+            '2Y_Treasury': 'DGS2', 'Industrial_Production': 'INDPRO',
+            'Consumer_Sentiment': 'UMCSENT', 'Retail_Sales': 'RSXFS',
+            'Housing_Starts': 'HOUST', 'PCE': 'PCE', 'Capacity_Utilization': 'CAPUTL',
+            'Labor_Force_Participation': 'CIVPART', 'Yield_Curve_Spread': 'T10Y2Y',
+            'GDP_Growth': 'A191RL1Q225SBEA', 'Employment_Change': 'CE16OV'
+        }
+        if not self.FRED_API_KEY:
+            neutral = {key: 0.0 for key in fred_series}
+            return self._ttl_set('economic_data', self.historical_economic or neutral, self.ECONOMIC_CACHE_TTL_SECONDS)
+
         try:
-            fred_series = {
-                'GDP': 'GDP', 'Real_GDP': 'GDPC1', 'Inflation': 'CPIAUCSL',
-                'Core_Inflation': 'CPILFESL', 'Unemployment': 'UNRATE',
-                'Initial_Claims': 'ICSA', 'Nonfarm_Payrolls': 'PAYEMS',
-                'Fed_Funds_Rate': 'FEDFUNDS', '10Y_Treasury': 'DGS10',
-                '2Y_Treasury': 'DGS2', 'Industrial_Production': 'INDPRO',
-                'Consumer_Sentiment': 'UMCSENT', 'Retail_Sales': 'RSXFS',
-                'Housing_Starts': 'HOUST', 'PCE': 'PCE', 'Capacity_Utilization': 'CAPUTL',
-                'Labor_Force_Participation': 'CIVPART', 'Yield_Curve_Spread': 'T10Y2Y',
-                'GDP_Growth': 'A191RL1Q225SBEA', 'Employment_Change': 'CE16OV'
-            }
             data = {}
             for key, series_id in fred_series.items():
                 url = f'https://api.stlouisfed.org/fred/series/observations?series_id={series_id}&api_key={self.FRED_API_KEY}&file_type=json&limit=10&sort_order=desc'
-                response = requests.get(url)
+                response = requests.get(url, timeout=8)
                 if response.status_code == 200:
-                    values = [float(obs['value']) for obs in response.json()['observations']]
+                    values = [float(obs['value']) for obs in response.json()['observations'] if obs.get('value') not in ('.', None)]
                     value = np.mean(values)  # Average of last 10 observations
                     data[key] = value / 100 if 'Rate' in key or 'Spread' in key or 'Inflation' in key else value
                 else:
@@ -135,17 +183,21 @@ class AdvancedStockPredictor:
                 self.historical_economic = data  # Cache first successful fetch
             elif any(v == 0.0 for v in data.values()):
                 data = {k: data.get(k, v) if data.get(k, 0.0) != 0.0 else v for k, v in self.historical_economic.items()}
-            return data
+            return self._ttl_set('economic_data', data, self.ECONOMIC_CACHE_TTL_SECONDS)
         except Exception as e:
             logging.warning(f"Error fetching economic data: {e}")
             return self.historical_economic if self.historical_economic else {k: 0.0 for k in fred_series}
 
     # Fetching VIX data from yfinance with historical fallback
     def _fetch_vix(self) -> float:
+        cached = self._ttl_get('vix')
+        if cached is not None:
+            return cached
         try:
             vix = yf.Ticker('^VIX').history(period='10d')
             if not vix.empty:
-                return float(vix['Close'].mean())  # Average of last 10 days
+                self.historical_vix = float(vix['Close'].mean())
+                return self._ttl_set('vix', self.historical_vix, self.MARKET_CACHE_TTL_SECONDS)
             logging.warning("VIX data empty")
             return self.historical_vix
         except Exception as e:
@@ -154,11 +206,16 @@ class AdvancedStockPredictor:
 
     # Fetching sector sentiment using News API based on keyword analysis
     def _fetch_sector_sentiment(self, sector: str) -> float:
+        cached = self._ttl_get(f'sentiment:{sector}')
+        if cached is not None:
+            return cached
+        if not self.NEWSAPI_KEY:
+            return self._ttl_set(f'sentiment:{sector}', 0.5, self.NEWS_CACHE_TTL_SECONDS)
         try:
             keywords = ' OR '.join(self.SECTOR_KEYWORDS.get(sector, ['sector']))
             from_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
             url = f'https://newsapi.org/v2/everything?q={keywords}&from={from_date}&language=en&sortBy=relevancy&apiKey={self.NEWSAPI_KEY}'
-            response = requests.get(url)
+            response = requests.get(url, timeout=8)
             if response.status_code == 200:
                 articles = response.json().get('articles', [])
                 if not articles:
@@ -174,12 +231,58 @@ class AdvancedStockPredictor:
                     score = sum(1 for w in positive_words if w in text) - sum(1 for w in negative_words if w in text)
                     sentiment_score += max(min(score / 5, 1.0), -1.0)  # Normalize to [-1, 1]
                     count += 1
-                return (sentiment_score / count + 1) / 2 if count > 0 else 0.5  # Scale to [0, 1]
+                score = (sentiment_score / count + 1) / 2 if count > 0 else 0.5
+                return self._ttl_set(f'sentiment:{sector}', score, self.NEWS_CACHE_TTL_SECONDS)
             logging.warning(f"News API failed for {sector}: {response.status_code}")
-            return 0.5
+            return self._ttl_set(f'sentiment:{sector}', 0.5, self.NEWS_CACHE_TTL_SECONDS)
         except Exception as e:
             logging.warning(f"Error fetching sector sentiment for {sector}: {e}")
             return 0.5
+
+    def _fetch_history(self, ticker: str, period: str = '1y') -> pd.DataFrame:
+        key = f'history:{ticker}:{period}'
+        cached = self._ttl_get(key)
+        if cached is not None:
+            return cached.copy()
+        df = yf.Ticker(ticker).history(period=period)
+        return self._ttl_set(key, df.copy(), self.MARKET_CACHE_TTL_SECONDS)
+
+    def _fetch_fundamentals(self, ticker: str) -> Dict[str, float]:
+        key = f'fundamentals:{ticker}'
+        cached = self._ttl_get(key)
+        if cached is not None:
+            return cached
+        try:
+            info = yf.Ticker(ticker).info or {}
+            fundamentals = {
+                'PE_Ratio': float(info.get('trailingPE') or info.get('forwardPE') or 0.0),
+                'EPS': float(info.get('trailingEps') or info.get('forwardEps') or 0.0),
+                'Revenue_TTM': float(info.get('totalRevenue') or 0.0),
+                'Debt_to_Equity': float(info.get('debtToEquity') or 0.0),
+            }
+            return self._ttl_set(key, fundamentals, self.ECONOMIC_CACHE_TTL_SECONDS)
+        except Exception as e:
+            logging.warning(f"Error fetching fundamentals for {ticker}: {e}")
+            return {name: 0.0 for name in self.FUNDAMENTAL_FEATURES}
+
+    def _probability_dict(self, model, probabilities) -> Dict[str, float]:
+        signal_map = {1: 'Buy', 0: 'Sell', 2: 'Hold'}
+        result = {'Sell': 0.0, 'Buy': 0.0, 'Hold': 0.0}
+        classes = getattr(model, 'classes_', [0, 1, 2])
+        for class_id, probability in zip(classes, probabilities):
+            result[signal_map.get(int(class_id), str(class_id))] = float(probability)
+        total = sum(result.values()) or 1.0
+        return {key: value / total for key, value in result.items()}
+
+    def _align_features(self, features: pd.DataFrame, ticker: str) -> pd.DataFrame:
+        ordered = features.reindex(columns=self._feature_names(ticker), fill_value=0.0)
+        expected = getattr(self.scaler, 'n_features_in_', ordered.shape[1])
+        if ordered.shape[1] < expected:
+            for index in range(expected - ordered.shape[1]):
+                ordered[f'padding_{index}'] = 0.0
+        elif ordered.shape[1] > expected:
+            ordered = ordered.iloc[:, :expected]
+        return ordered.fillna(0.0).replace([np.inf, -np.inf], 0.0)
 
     # Computing technical indicators for stock price data
     def _compute_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -257,6 +360,8 @@ class AdvancedStockPredictor:
             if not valid_tickers:
                 return {'portfolio': tickers, 'error': 'No valid tickers provided'}
 
+            risk_tolerance = self._normalize_risk_tolerance(risk_tolerance)
+
             risk_weights = {
                 'low': {'Buy': 0.6, 'Hold': 0.3, 'Sell': 0.1},
                 'medium': {'Buy': 0.4, 'Hold': 0.4, 'Sell': 0.2},
@@ -302,13 +407,32 @@ class AdvancedStockPredictor:
         except Exception as e:
             return {'portfolio': tickers, 'error': f'Recommendation failed: {e}'}
 
+    def _normalize_risk_tolerance(self, risk_tolerance) -> str:
+        if isinstance(risk_tolerance, (int, float)):
+            if risk_tolerance < 0.4:
+                return 'low'
+            if risk_tolerance > 0.65:
+                return 'high'
+            return 'medium'
+        normalized = str(risk_tolerance or 'medium').strip().lower()
+        if normalized in ('conservative', 'low'):
+            return 'low'
+        if normalized in ('aggressive', 'high'):
+            return 'high'
+        return 'medium'
+
     # Making predictions for a single ticker using real-time data
     def predict(self, ticker: str) -> Dict:
+        ticker = ticker.upper().strip()
+        cached = self._ttl_get(f'prediction:{ticker}')
+        if cached is not None:
+            return {**cached, 'cache_status': 'hit'}
+
         if not self.short_term_model or not self.long_term_model or not self.scaler:
             self.load_models()
 
         try:
-            df = yf.Ticker(ticker).history(period='1y')
+            df = self._fetch_history(ticker, period='1y')
             if df.empty:
                 return {'ticker': ticker, 'error': 'No data available'}
 
@@ -326,8 +450,9 @@ class AdvancedStockPredictor:
                 'Sector_Sentiment': self._fetch_sector_sentiment(sector),
                 **economic_data
             }
+            latest_data.update(self._fetch_fundamentals(ticker))
 
-            features = pd.DataFrame([latest_data])
+            features = self._align_features(pd.DataFrame([latest_data]), ticker)
             features_scaled = self.scaler.transform(features.values)
             
             short_pred = self.short_term_model.predict(features_scaled)[0]
@@ -341,16 +466,25 @@ class AdvancedStockPredictor:
             price_change_percent = ((current_price - prev_price) / prev_price) * 100 if prev_price != 0 else 0
             
             signal_map = {1: 'Buy', 0: 'Sell', 2: 'Hold'}
-            return {
+            short_probabilities = self._probability_dict(self.short_term_model, short_proba)
+            long_probabilities = self._probability_dict(self.long_term_model, long_proba)
+            confidence = max(short_probabilities.values())
+
+            result = {
                 'ticker': ticker,
                 'current_price': float(current_price),
                 'price_change_percent': float(price_change_percent),
                 'short_term_prediction': signal_map[short_pred],
-                'short_term_probabilities': dict(zip(['Sell', 'Buy', 'Hold'], short_proba)),
+                'short_term_probabilities': short_probabilities,
                 'long_term_prediction': signal_map[long_pred],
-                'long_term_probabilities': dict(zip(['Sell', 'Buy', 'Hold'], long_proba)),
-                'explanation': f"Based on technical indicators, VIX, sector sentiment, and economic data, {ticker} is predicted to {signal_map[short_pred]} in the short term (63 days) and {signal_map[long_pred]} in the long term (252 days)."
+                'long_term_probabilities': long_probabilities,
+                'confidence': float(confidence),
+                'model_version': 'enhanced-gradient-boosting-v2',
+                'cache_status': 'miss',
+                'explanation': f"Based on technical indicators, VIX, fundamentals, sector sentiment, and economic data, {ticker} is predicted to {signal_map[short_pred]} in the short term (63 days) and {signal_map[long_pred]} in the long term (252 days)."
             }
+            self._ttl_set(f'prediction:{ticker}', result, self.CACHE_TTL_SECONDS)
+            return result
         except Exception as e:
             return {'ticker': ticker, 'error': f'Prediction failed: {e}'}
 
@@ -384,7 +518,7 @@ class AdvancedStockPredictor:
         results = []
         for ticker in self.TICKERS:
             try:
-                df = yf.Ticker(ticker).history(period='2d')
+                df = self._fetch_history(ticker, period='5d')
                 if df.empty or len(df) < 2:
                     continue
                 current = df['Close'].iloc[-1]

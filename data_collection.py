@@ -314,7 +314,7 @@ class EnhancedDataCollector:
         print(f"Starting data collection for {tickers if tickers else 'all tickers'} from {start_date} to {end_date or 'present'}")
         stock_data = {}
         fundamental_data = {}
-        from advanced_stock_predictor import AdvancedStockPredictor
+        from stock_predictor import AdvancedStockPredictor
         predictor = AdvancedStockPredictor()
 
         target_tickers = tickers if tickers else predictor.get_all_tickers()

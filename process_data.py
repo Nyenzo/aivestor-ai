@@ -4,7 +4,7 @@ import pickle
 import os
 from datetime import datetime
 from typing import Dict, List
-from advanced_stock_predictor import AdvancedStockPredictor
+from stock_predictor import AdvancedStockPredictor
 
 class EnhancedDataProcessor:
     DATA_DIR = 'datacollection'
