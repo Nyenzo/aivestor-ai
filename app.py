@@ -24,7 +24,7 @@ logging.info("Flask AI service initialized")
 
 @app.after_request
 def apply_cache_headers(response):
-    if request.path.startswith('/predict') or request.path == '/portfolio':
+    if request.path.startswith('/predict') or request.path in ['/portfolio', '/trade_suggestions']:
         if response.status_code == 200:
             response.headers['Cache-Control'] = 'private, max-age=60, stale-while-revalidate=120'
             response.headers['X-Model-Service'] = 'aivestor-ai'
@@ -150,6 +150,55 @@ def generate_portfolio() -> Dict:
         logging.error(f"Portfolio recommendation failed: {str(e)}")
         logging.debug(f"Traceback: {traceback.format_exc()}")
         return jsonify({'error': f'Recommendation failed: {str(e)}'}), 500
+
+@app.route('/trade_suggestions', methods=['POST'])
+@require_auth
+def trade_suggestions() -> Dict:
+    try:
+        data = request.get_json() or {}
+        tickers = data.get('tickers', [])
+        risk_tolerance = str(data.get('risk_tolerance', 'medium')).lower()
+        if not tickers:
+            return jsonify({'error': 'No tickers provided'}), 400
+
+        suggestions = []
+        for ticker in tickers[:8]:
+            try:
+                prediction = predictor.predict(str(ticker).upper())
+                short_signal = str(prediction.get('short_term_prediction', 'Hold'))
+                long_signal = str(prediction.get('long_term_prediction', 'Hold'))
+                current_price = prediction.get('current_price') or prediction.get('price') or 0
+                action = 'Hold'
+                if 'buy' in short_signal.lower() or 'buy' in long_signal.lower():
+                    action = 'Buy'
+                elif 'sell' in short_signal.lower() or 'sell' in long_signal.lower():
+                    action = 'Reduce'
+                confidence = prediction.get('confidence') or prediction.get('short_term_confidence') or 62
+                suggestions.append({
+                    'symbol': str(ticker).upper(),
+                    'action': action,
+                    'confidence': confidence,
+                    'price': current_price,
+                    'risk_tolerance': risk_tolerance,
+                    'rationale': prediction.get('explanation') or f'{ticker} model signal is {short_signal} short term and {long_signal} long term.',
+                })
+            except Exception as item_error:
+                suggestions.append({
+                    'symbol': str(ticker).upper(),
+                    'action': 'Watch',
+                    'confidence': 50,
+                    'risk_tolerance': risk_tolerance,
+                    'rationale': f'Model fallback: {item_error}',
+                })
+
+        return jsonify({
+            'model': {'name': 'Aivestor Trade Suggestions', 'version': 'enhanced-gradient-boosting-v2'},
+            'suggestions': suggestions,
+        })
+    except Exception as e:
+        logging.error(f"Trade suggestion generation failed: {str(e)}")
+        logging.debug(f"Traceback: {traceback.format_exc()}")
+        return jsonify({'error': f'Trade suggestions failed: {str(e)}'}), 500
 
 # Endpoint for chatbot FAQ responses
 @app.route('/chat', methods=['POST'])
