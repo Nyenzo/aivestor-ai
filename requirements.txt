@@ -17,6 +17,7 @@ PyPDF2
 pdf2image
 pytesseract
 flask
+gunicorn
 pyjwt
 pytest
 pytest-cov

@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 # Ensure AI test mode with lightweight stubs
 os.environ.setdefault('AI_TEST_MODE', '1')
-os.environ.setdefault('JWT_SECRET', 'test-secret')
+os.environ.setdefault('JWT_SECRET', 'test-secret-change-before-production-32')
 os.environ.setdefault('FRED_API_KEY', 'mock-fred-key')
 os.environ.setdefault('NEWSAPI_KEY', 'mock-news-key')
 os.environ.setdefault('DEEPSEEK_API_KEY', 'mock-deepseek-key')

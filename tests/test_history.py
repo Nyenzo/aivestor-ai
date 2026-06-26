@@ -3,7 +3,7 @@ import jwt
 import os
 
 def _token():
-    return jwt.encode({'sub':'abc','uid':'abc'}, os.environ.get('JWT_SECRET', 'test-secret'), algorithm='HS256')
+    return jwt.encode({'sub':'abc','uid':'abc'}, os.environ.get('JWT_SECRET', 'test-secret-change-before-production-32'), algorithm='HS256')
 
 @pytest.fixture
 def auth_headers():

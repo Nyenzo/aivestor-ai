@@ -6,7 +6,8 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 os.environ['AI_TEST_MODE'] = '1'
-os.environ['JWT_SECRET'] = 'test-secret'
+TEST_JWT_SECRET = 'test-secret-change-before-production-32'
+os.environ['JWT_SECRET'] = TEST_JWT_SECRET
 
 from app import app as flask_app
 import jwt
@@ -19,7 +20,7 @@ def client():
 
 @pytest.fixture()
 def auth_headers():
-    token = jwt.encode({'user_id': 1, 'email': 'test@test.com'}, 'test-secret', algorithm='HS256')
+    token = jwt.encode({'user_id': 1, 'email': 'test@test.com'}, TEST_JWT_SECRET, algorithm='HS256')
     return {'Authorization': f'Bearer {token}'}
 
 def test_tracing_initialized():

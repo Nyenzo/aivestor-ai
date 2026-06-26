@@ -19,7 +19,15 @@ app = Flask(__name__)
 load_dotenv()
 predictor = AdvancedStockPredictor()
 chatbot = AivestorChatbot()
-SECRET_KEY = os.getenv('JWT_SECRET_KEY') or os.getenv('JWT_SECRET') or 'your-very-secure-secret-key'
+SECRET_KEY = os.getenv('JWT_SECRET_KEY') or os.getenv('JWT_SECRET')
+if not SECRET_KEY:
+    if os.getenv('FLASK_ENV') == 'production' or os.getenv('ENV') == 'production':
+        raise RuntimeError('JWT_SECRET_KEY or JWT_SECRET is required in production')
+    SECRET_KEY = 'dev-only-ai-jwt-secret-change-before-prod-32'
+if len(SECRET_KEY) < 32:
+    if os.getenv('FLASK_ENV') == 'production' or os.getenv('ENV') == 'production':
+        raise RuntimeError('AI JWT secret must be at least 32 characters in production')
+    logging.warning('AI JWT secret is shorter than 32 characters; use a stronger value outside tests')
 logging.info("Flask AI service initialized")
 
 @app.after_request

@@ -8,7 +8,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 # Set test mode before imports
 os.environ['AI_TEST_MODE'] = '1'
-os.environ['JWT_SECRET'] = 'test-secret'
+TEST_JWT_SECRET = 'test-secret-change-before-production-32'
+os.environ['JWT_SECRET'] = TEST_JWT_SECRET
 
 from app import app as flask_app
 
@@ -22,7 +23,7 @@ def client():
 def auth_headers():
 
     import jwt
-    token = jwt.encode({'user_id': 1, 'email': 'test@test.com'}, 'test-secret', algorithm='HS256')
+    token = jwt.encode({'user_id': 1, 'email': 'test@test.com'}, TEST_JWT_SECRET, algorithm='HS256')
     return {'Authorization': f'Bearer {token}'}
 
 def test_chatbot_no_auth(client):
@@ -95,4 +96,3 @@ def test_chatbot_tfidf_fallback(client, auth_headers, monkeypatch):
     # The default corpus tfidf result or the global fallback "Haha you got me..."
     assert isinstance(answer, str)
     assert len(answer) > 0
-
