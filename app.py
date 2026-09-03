@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 import logging
 import traceback
 import yfinance as yf
+import time
 
 # Setting up logging to track API requests and errors
 logging.basicConfig(filename='aivestor.log', level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -19,6 +20,8 @@ app = Flask(__name__)
 load_dotenv()
 predictor = AdvancedStockPredictor()
 chatbot = AivestorChatbot()
+HISTORY_CACHE_TTL_SECONDS = int(os.getenv('HISTORY_CACHE_TTL_SECONDS', '300'))
+history_cache = {}
 SECRET_KEY = os.getenv('JWT_SECRET_KEY') or os.getenv('JWT_SECRET')
 if not SECRET_KEY:
     if os.getenv('FLASK_ENV') == 'production' or os.getenv('ENV') == 'production':
@@ -32,20 +35,23 @@ logging.info("Flask AI service initialized")
 
 @app.after_request
 def apply_cache_headers(response):
-    if request.path.startswith('/predict') or request.path in ['/portfolio', '/trade_suggestions']:
+    if request.path.startswith('/predict') or request.path in ['/portfolio', '/trade_suggestions', '/history']:
         if response.status_code == 200:
             response.headers['Cache-Control'] = 'private, max-age=60, stale-while-revalidate=120'
             response.headers['X-Model-Service'] = 'aivestor-ai'
-    elif request.path == '/health':
+    elif request.path in ['/health', '/healthz']:
         response.headers['Cache-Control'] = 'no-store'
     return response
 
 @app.route('/health', methods=['GET'])
+@app.route('/healthz', methods=['GET'])
 def health() -> Dict:
+    model_status = predictor.get_model_status()
     return jsonify({
         'ok': True,
         'service': 'aivestor-ai',
-        'model_version': 'enhanced-gradient-boosting-v2'
+        'model_mode': model_status['mode'],
+        'model_version': 'enhanced-gradient-boosting-v2' if model_status['mode'] == 'persisted-ml' else 'technical-signal-v1'
     })
 
 # Middleware to verify JWT tokens
@@ -73,6 +79,11 @@ def get_history(ticker: str) -> Dict:
     if period not in allowed_periods:
         period = '1y'
 
+    cache_key = (ticker.upper(), period)
+    cached = history_cache.get(cache_key)
+    if cached and cached['expires_at'] > time.time():
+        return jsonify(cached['payload'])
+
     try:
         history = yf.Ticker(ticker).history(period=period)
         rows = []
@@ -87,7 +98,9 @@ def get_history(ticker: str) -> Dict:
                     'low': float(row.get('Low', 0) or 0),
                     'volume': float(row.get('Volume', 0) or 0),
                 })
-        return jsonify({'ticker': ticker.upper(), 'period': period, 'data': rows})
+        payload = {'ticker': ticker.upper(), 'period': period, 'data': rows}
+        history_cache[cache_key] = {'expires_at': time.time() + HISTORY_CACHE_TTL_SECONDS, 'payload': payload}
+        return jsonify(payload)
     except Exception as e:
         logging.warning(f"History fetch failed for {ticker}: {e}")
         return jsonify({'ticker': ticker.upper(), 'period': period, 'data': [], 'error': str(e)})
@@ -173,6 +186,9 @@ def trade_suggestions() -> Dict:
         for ticker in tickers[:8]:
             try:
                 prediction = predictor.predict(str(ticker).upper())
+                if prediction.get('error'):
+                    logging.warning('Trade suggestion unavailable for %s', ticker)
+                    continue
                 short_signal = str(prediction.get('short_term_prediction', 'Hold'))
                 long_signal = str(prediction.get('long_term_prediction', 'Hold'))
                 current_price = prediction.get('current_price') or prediction.get('price') or 0
@@ -190,17 +206,14 @@ def trade_suggestions() -> Dict:
                     'risk_tolerance': risk_tolerance,
                     'rationale': prediction.get('explanation') or f'{ticker} model signal is {short_signal} short term and {long_signal} long term.',
                 })
-            except Exception as item_error:
-                suggestions.append({
-                    'symbol': str(ticker).upper(),
-                    'action': 'Watch',
-                    'confidence': 50,
-                    'risk_tolerance': risk_tolerance,
-                    'rationale': f'Model fallback: {item_error}',
-                })
+            except Exception:
+                logging.exception('Trade suggestion generation failed for %s', ticker)
+
+        if not suggestions:
+            return jsonify({'error': 'AI market model could not produce suggestions for the requested instruments'}), 503
 
         return jsonify({
-            'model': {'name': 'Aivestor Trade Suggestions', 'version': 'enhanced-gradient-boosting-v2'},
+            'model': {'name': 'Aivestor Trade Suggestions', 'version': predictor.get_model_status()['mode']},
             'suggestions': suggestions,
         })
     except Exception as e:
@@ -229,4 +242,4 @@ def chat() -> Dict:
 
 # Running the Flask API on port 5001
 if __name__ == "__main__":
-    app.run(debug=True, host='0.0.0.0', port=5001)
+    app.run(debug=os.getenv('FLASK_DEBUG', '').lower() == 'true', host='0.0.0.0', port=5001)

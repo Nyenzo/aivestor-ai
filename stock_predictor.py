@@ -75,6 +75,8 @@ class AdvancedStockPredictor:
         self.short_term_model = None
         self.long_term_model = None
         self.scaler = None
+        self.model_mode = 'uninitialized'
+        self.model_load_error = None
         self.sector_mappings = self._create_sector_mappings()
         self.historical_vix = 20.0  # Historical average
         self.historical_economic = None  # Set after first fetch
@@ -132,7 +134,7 @@ class AdvancedStockPredictor:
 
     # Loading trained machine learning models and scaler
     def load_models(self):
-        if self.short_term_model and self.long_term_model and self.scaler:
+        if self.model_mode != 'uninitialized':
             return
         try:
             with open(os.path.join(self.MODEL_DIR, 'short_term_model.pkl'), 'rb') as f:
@@ -141,10 +143,19 @@ class AdvancedStockPredictor:
                 self.long_term_model = pickle.load(f)
             with open(os.path.join(self.MODEL_DIR, 'scaler.pkl'), 'rb') as f:
                 self.scaler = pickle.load(f)
-            print("Loaded models and scaler")
-        except FileNotFoundError:
-            print("Error: Trained models not found. Please run train_model_cv.py first.")
-            raise
+            self.model_mode = 'persisted-ml'
+            logging.info('Loaded persisted prediction models')
+        except Exception as error:
+            self.short_term_model = None
+            self.long_term_model = None
+            self.scaler = None
+            self.model_mode = 'technical-signal'
+            self.model_load_error = type(error).__name__
+            logging.warning('Persisted prediction models are unavailable; using technical-signal model (%s)', self.model_load_error)
+
+    def get_model_status(self) -> Dict[str, str]:
+        self.load_models()
+        return {'mode': self.model_mode, 'artifact_error': self.model_load_error}
 
     # Fetching economic indicators from FRED API with fallback handling
     def _fetch_economic_data(self) -> Dict[str, float]:
@@ -421,6 +432,35 @@ class AdvancedStockPredictor:
             return 'high'
         return 'medium'
 
+    def _technical_signal_prediction(self, ticker: str, df: pd.DataFrame) -> Dict:
+        current_price = float(df['Close'].iloc[-1])
+        previous_price = float(df['Close'].iloc[-2]) if len(df) > 1 else current_price
+        price_change_percent = ((current_price - previous_price) / previous_price) * 100 if previous_price else 0.0
+        rsi = float(df['RSI'].iloc[-1])
+        macd = float(df['MACD'].iloc[-1])
+        prior_macd = float(df['MACD'].iloc[-2]) if len(df) > 1 else macd
+        moving_average = float(df['Close'].tail(20).mean())
+        score = int(rsi >= 55) - int(rsi <= 45) + int(macd > 0) - int(macd < 0) + int(macd >= prior_macd) - int(macd < prior_macd) + int(current_price >= moving_average) - int(current_price < moving_average)
+        action = 'Buy' if score >= 2 else 'Sell' if score <= -2 else 'Hold'
+        confidence = min(0.84, max(0.52, 0.54 + abs(score) * 0.07))
+        remainder = (1.0 - confidence) / 2
+        probabilities = {'Sell': remainder, 'Buy': remainder, 'Hold': remainder}
+        probabilities[action] = confidence
+        result = {
+            'ticker': ticker,
+            'current_price': current_price,
+            'price_change_percent': float(price_change_percent),
+            'short_term_prediction': action,
+            'short_term_probabilities': probabilities,
+            'long_term_prediction': 'Hold' if action != 'Buy' else 'Buy',
+            'long_term_probabilities': probabilities.copy(),
+            'confidence': confidence,
+            'model_version': 'technical-signal-v1',
+            'cache_status': 'miss',
+            'explanation': f'Live technical signal uses RSI {rsi:.1f}, MACD direction, and the 20-session trend for {ticker}.',
+        }
+        return self._ttl_set(f'prediction:{ticker}', result, self.CACHE_TTL_SECONDS)
+
     # Making predictions for a single ticker using real-time data
     def predict(self, ticker: str) -> Dict:
         ticker = ticker.upper().strip()
@@ -428,15 +468,15 @@ class AdvancedStockPredictor:
         if cached is not None:
             return {**cached, 'cache_status': 'hit'}
 
-        if not self.short_term_model or not self.long_term_model or not self.scaler:
-            self.load_models()
-
         try:
+            self.load_models()
             df = self._fetch_history(ticker, period='1y')
             if df.empty:
                 return {'ticker': ticker, 'error': 'No data available'}
 
             df = self._compute_indicators(df)
+            if self.model_mode != 'persisted-ml':
+                return self._technical_signal_prediction(ticker, df)
             sector = self.get_sector(ticker)
             economic_data = self._fetch_economic_data()
             latest_data = {
